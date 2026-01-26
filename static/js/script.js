@@ -1,26 +1,33 @@
  // --- Global Variables ---
         let flowChart = null;
+        let dispensing = false;
+        let progressInterval = null;
+
+        // --- Slider Binding Helper ---
+        function bindSlider(sliderId, valueId, tooltipId) {
+            const slider = document.getElementById(sliderId);
+            const valueBox = document.getElementById(valueId);
+
+            slider.addEventListener('input', () => {
+                valueBox.textContent = slider.value;
+                updateTooltip(sliderId, tooltipId);
+            });
+}
 
         // --- Initialize ---
-        document.addEventListener('DOMContentLoaded', function() {
-            // Update slider values in real-time
-            document.getElementById('waterSlider').addEventListener('input', function() {
-                document.getElementById('waterValue').textContent = this.value;
-                updateTooltip('waterSlider', 'waterTooltip');
-            });
-            document.getElementById('syrupSlider').addEventListener('input', function() {
-                document.getElementById('syrupValue').textContent = this.value;
-                updateTooltip('syrupSlider', 'syrupTooltip');
-            });
+       document.addEventListener('DOMContentLoaded', () => {
+    bindSlider('waterSlider', 'waterValue', 'waterTooltip');
+    bindSlider('syrupSlider', 'syrupValue', 'syrupTooltip');
 
-            // Initialize tooltips
-            updateTooltip('waterSlider', 'waterTooltip');
-            updateTooltip('syrupSlider', 'syrupTooltip');
+    // Initialize tooltips once
+    updateTooltip('waterSlider', 'waterTooltip');
+    updateTooltip('syrupSlider', 'syrupTooltip');
 
-            // Initialize chart
-            initChart();
-            updateHistory();
-        });
+    // Initialize chart & history
+    initChart();
+    updateHistory();
+});
+
 
         // --- Functions ---
         function updateTooltip(sliderId, tooltipId) {
@@ -44,71 +51,71 @@
             showStatus(`Preset loaded: ${water}ml Water, ${syrup}ml Syrup`, 'info');
         }
 
-        function startDispensing() {
-            const water = document.getElementById('waterSlider').value;
-            const syrup = document.getElementById('syrupSlider').value;
+function startDispensing() {
+    if (dispensing) return;
 
-            // Disable button and show progress
-            const btn = document.querySelector('button.btn-success');
-            btn.disabled = true;
-            document.getElementById('dispenseBtnText').textContent = '⏳ Dispensing...';
+    const water = Number(document.getElementById('waterSlider').value);
+    const syrup = Number(document.getElementById('syrupSlider').value);
 
-            showStatus(`Starting: ${water}ml Water + ${syrup}ml Syrup`, 'warning');
+    dispensing = true;
 
-            // Show progress bar
-            const progressContainer = document.getElementById('progressContainer');
-            const progressBar = document.getElementById('progressBar');
-            progressContainer.style.display = 'block';
-            progressBar.style.width = '0%';
-            progressBar.textContent = '0%';
+    const btn = document.querySelector('.btn-success');
+    btn.disabled = true;
+    document.getElementById('dispenseBtnText').textContent = '⏳ Dispensing...';
 
-            // Simulate progress (replace with real WebSocket updates)
-            let progress = 0;
-            const interval = setInterval(() => {
-                progress += 10;
-                progressBar.style.width = progress + '%';
-                progressBar.textContent = progress + '%';
-                if (progress >= 100) {
-                    clearInterval(interval);
-                    progressBar.classList.remove('progress-bar-animated');
-                }
-            }, 300);
+    showStatus(`Dispensing ${water} ml Water & ${syrup} ml Syrup`, 'warning');
 
-            // Send data to Flask backend
-            fetch('/dispense', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ water: water, syrup: syrup })
-            })
-            .then(response => response.json())
-            .then(data => {
-                showStatus(data.message, 'success');
-                updateChart(); // Update flow chart
-                updateHistory(); // Refresh history
+    const progressBar = document.getElementById('progressBar');
+    document.getElementById('progressContainer').style.display = 'block';
 
-                // Re-enable button after 3 seconds
-                setTimeout(() => {
-                    btn.disabled = false;
-                    document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
-                    progressContainer.style.display = 'none';
-                    progressBar.classList.add('progress-bar-animated');
-                }, 3000);
-            })
-            .catch(error => {
-                showStatus('Error: ' + error.message, 'danger');
-                btn.disabled = false;
-                document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
-            });
+    let progress = 0;
+    progressInterval = setInterval(() => {
+        progress += 2;
+        progressBar.style.width = progress + '%';
+        progressBar.textContent = progress + '%';
+
+        updateChart(progress);
+
+        if (progress >= 100) {
+            clearInterval(progressInterval);
+            finishDispense();
         }
+    }, 200);
 
-        function emergencyStop() {
-            fetch('/stop', { method: 'POST' }) // You'll need to create this route in Flask
-                .then(() => {
-                    showStatus('Emergency stop activated! All pumps halted.', 'danger');
-                    document.querySelector('button.btn-success').disabled = false;
-                    document.getElementById('progressContainer').style.display = 'none';
-                });
-        }
+    fetch('/dispense', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ water, syrup })
+    }).catch(() => {
+        emergencyStop();
+    });
+}
+
+function emergencyStop() {
+    if (!dispensing) return;
+
+    clearInterval(progressInterval);
+    dispensing = false;
+
+    fetch('/stop', { method: 'POST' });
+
+    document.querySelector('.btn-success').disabled = false;
+    document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
+    document.getElementById('progressContainer').style.display = 'none';
+
+    showStatus('Emergency stop activated! Pumps halted.', 'danger');
+}
+
+function finishDispense() {
+    dispensing = false;
+
+    document.querySelector('.btn-success').disabled = false;
+    document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
+
+    showStatus('Dispensing completed successfully!', 'success');
+    updateHistory();
+}
+
 
         function showStatus(message, type = 'info') {
             const statusBox = document.getElementById('statusBox');
@@ -116,44 +123,49 @@
             statusBox.className = `alert alert-${type}`;
         }
 
-        function initChart() {
-            const ctx = document.getElementById('flowChart').getContext('2d');
-            flowChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: ['0s', '2s', '4s', '6s', '8s', '10s'],
-                    datasets: [{
-                        label: 'Water Flow Rate (ml/s)',
-                        data: [0, 20, 45, 30, 50, 0],
-                        borderColor: '#0d6efd',
-                        backgroundColor: 'rgba(13, 110, 253, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        title: {
-                            display: true,
-                            text: 'Real-time Flow Rate'
-                        }
-                    }
-                }
-            });
-        }
+       function initChart() {
+    const ctx = document.getElementById('flowChart').getContext('2d');
 
-        function updateChart() {
-            // Simulate new data
-            if (flowChart) {
-                const newData = Math.random() * 50 + 10;
-                flowChart.data.datasets[0].data.push(newData);
-                if (flowChart.data.labels.length > 10) {
-                    flowChart.data.labels.shift();
-                    flowChart.data.datasets[0].data.shift();
-                }
-                flowChart.update();
+    flowChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Flow Rate (ml/s)',
+                data: [],
+                borderWidth: 2,
+                tension: 0.3
+            }]
+        },
+        options: {
+            animation: false,
+            scales: {
+                x: { title: { display: true, text: 'Time (s)' } },
+                y: { title: { display: true, text: 'Flow Rate' }, min: 0 }
             }
         }
+    });
+}
+
+
+        let timeStep = 0;
+
+function updateChart(progress) {
+    if (!flowChart) return;
+
+    const flowRate = Math.max(0, 50 - progress * 0.4); // PID-like decay
+
+    flowChart.data.labels.push(timeStep++);
+    flowChart.data.datasets[0].data.push(flowRate);
+
+    if (flowChart.data.labels.length > 20) {
+        flowChart.data.labels.shift();
+        flowChart.data.datasets[0].data.shift();
+    }
+
+    flowChart.update();
+}
+
 
         function updateHistory() {
             fetch('/history')
