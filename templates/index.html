@@ -36,7 +36,10 @@
                         <!-- Water Control -->
                         <div class="liquid-card water">
                             <h5>💧 Water</h5>
-                            <input type="range" class="form-range" id="waterSlider" min="0" max="500" value="100">
+                            <div class="slider-container">
+                                <input type="range" class="form-range" id="waterSlider" min="0" max="500" value="100">
+                                <span class="slider-tooltip" id="waterTooltip">100</span>
+                            </div>
                             <div class="d-flex justify-content-between">
                                 <span>0 ml</span>
                                 <strong><span id="waterValue">100</span> ml</strong>
@@ -47,7 +50,10 @@
                         <!-- Syrup Control -->
                         <div class="liquid-card syrup">
                             <h5>🍯 Syrup</h5>
-                            <input type="range" class="form-range" id="syrupSlider" min="0" max="500" value="50">
+                            <div class="slider-container">
+                                <input type="range" class="form-range" id="syrupSlider" min="0" max="500" value="50">
+                                <span class="slider-tooltip" id="syrupTooltip">50</span>
+                            </div>
                             <div class="d-flex justify-content-between">
                                 <span>0 ml</span>
                                 <strong><span id="syrupValue">50</span> ml</strong>

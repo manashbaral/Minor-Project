@@ -6,10 +6,16 @@
             // Update slider values in real-time
             document.getElementById('waterSlider').addEventListener('input', function() {
                 document.getElementById('waterValue').textContent = this.value;
+                updateTooltip('waterSlider', 'waterTooltip');
             });
             document.getElementById('syrupSlider').addEventListener('input', function() {
                 document.getElementById('syrupValue').textContent = this.value;
+                updateTooltip('syrupSlider', 'syrupTooltip');
             });
+
+            // Initialize tooltips
+            updateTooltip('waterSlider', 'waterTooltip');
+            updateTooltip('syrupSlider', 'syrupTooltip');
 
             // Initialize chart
             initChart();
@@ -17,11 +23,24 @@
         });
 
         // --- Functions ---
+        function updateTooltip(sliderId, tooltipId) {
+            const slider = document.getElementById(sliderId);
+            const tooltip = document.getElementById(tooltipId);
+            const value = slider.value;
+            const min = slider.min;
+            const max = slider.max;
+            const percent = ((value - min) / (max - min)) * 100;
+            tooltip.textContent = value + ' ml';
+            tooltip.style.left = percent + '%';
+        }
+
         function setPreset(water, syrup) {
             document.getElementById('waterSlider').value = water;
             document.getElementById('syrupSlider').value = syrup;
             document.getElementById('waterValue').textContent = water;
             document.getElementById('syrupValue').textContent = syrup;
+            updateTooltip('waterSlider', 'waterTooltip');
+            updateTooltip('syrupSlider', 'syrupTooltip');
             showStatus(`Preset loaded: ${water}ml Water, ${syrup}ml Syrup`, 'info');
         }
 
