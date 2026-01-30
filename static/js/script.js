@@ -1,56 +1,43 @@
- // --- Global Variables ---
-        let flowChart = null;
-        let dispensing = false;
-        let progressInterval = null;
+// --- Global Variables ---
+let flowChart = null;
+let dispensing = false;
+let progressInterval = null;
+let currentHistoryPage = 0;      // current page index
+const historyPerPage = 3;        // logs per page
 
-        // --- Slider Binding Helper ---
-        function bindSlider(sliderId, valueId, tooltipId) {
-            const slider = document.getElementById(sliderId);
-            const valueBox = document.getElementById(valueId);
+// --- Slider Helper ---
+function bindSlider(sliderId, valueId, tooltipId) {
+    const slider = document.getElementById(sliderId);
+    const valueBox = document.getElementById(valueId);
 
-            slider.addEventListener('input', () => {
-                valueBox.textContent = slider.value;
-                updateTooltip(sliderId, tooltipId);
-            });
+    slider.addEventListener('input', () => {
+        valueBox.textContent = slider.value;
+        updateTooltip(sliderId, tooltipId);
+    });
 }
 
-        // --- Initialize ---
-       document.addEventListener('DOMContentLoaded', () => {
-    bindSlider('waterSlider', 'waterValue', 'waterTooltip');
-    bindSlider('syrupSlider', 'syrupValue', 'syrupTooltip');
+function updateTooltip(sliderId, tooltipId) {
+    const slider = document.getElementById(sliderId);
+    const tooltip = document.getElementById(tooltipId);
+    const value = slider.value;
+    const min = slider.min;
+    const max = slider.max;
+    const percent = ((value - min) / (max - min)) * 100;
+    tooltip.textContent = value + ' ml';
+    tooltip.style.left = percent + '%';
+}
 
-    // Initialize tooltips once
+function setPreset(water, syrup) {
+    document.getElementById('waterSlider').value = water;
+    document.getElementById('syrupSlider').value = syrup;
+    document.getElementById('waterValue').textContent = water;
+    document.getElementById('syrupValue').textContent = syrup;
     updateTooltip('waterSlider', 'waterTooltip');
     updateTooltip('syrupSlider', 'syrupTooltip');
+    showStatus(`Preset loaded: ${water}ml Water, ${syrup}ml Syrup`, 'info');
+}
 
-    // Initialize chart & history
-    initChart();
-    updateHistory();
-});
-
-
-        // --- Functions ---
-        function updateTooltip(sliderId, tooltipId) {
-            const slider = document.getElementById(sliderId);
-            const tooltip = document.getElementById(tooltipId);
-            const value = slider.value;
-            const min = slider.min;
-            const max = slider.max;
-            const percent = ((value - min) / (max - min)) * 100;
-            tooltip.textContent = value + ' ml';
-            tooltip.style.left = percent + '%';
-        }
-
-        function setPreset(water, syrup) {
-            document.getElementById('waterSlider').value = water;
-            document.getElementById('syrupSlider').value = syrup;
-            document.getElementById('waterValue').textContent = water;
-            document.getElementById('syrupValue').textContent = syrup;
-            updateTooltip('waterSlider', 'waterTooltip');
-            updateTooltip('syrupSlider', 'syrupTooltip');
-            showStatus(`Preset loaded: ${water}ml Water, ${syrup}ml Syrup`, 'info');
-        }
-
+// --- Dispensing Functions ---
 function startDispensing() {
     if (dispensing) return;
 
@@ -58,11 +45,8 @@ function startDispensing() {
     const syrup = Number(document.getElementById('syrupSlider').value);
 
     dispensing = true;
-
-    const btn = document.querySelector('.btn-success');
-    btn.disabled = true;
+    document.querySelector('.btn-success').disabled = true;
     document.getElementById('dispenseBtnText').textContent = '⏳ Dispensing...';
-
     showStatus(`Dispensing ${water} ml Water & ${syrup} ml Syrup`, 'warning');
 
     const progressBar = document.getElementById('progressBar');
@@ -73,7 +57,6 @@ function startDispensing() {
         progress += 2;
         progressBar.style.width = progress + '%';
         progressBar.textContent = progress + '%';
-
         updateChart(progress);
 
         if (progress >= 100) {
@@ -86,9 +69,7 @@ function startDispensing() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ water, syrup })
-    }).catch(() => {
-        emergencyStop();
-    });
+    }).catch(() => emergencyStop());
 }
 
 function emergencyStop() {
@@ -97,7 +78,11 @@ function emergencyStop() {
     clearInterval(progressInterval);
     dispensing = false;
 
-    fetch('/stop', { method: 'POST' });
+    fetch('/emergency-stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: "User pressed emergency stop" })
+    }).then(() => updateHistory());
 
     document.querySelector('.btn-success').disabled = false;
     document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
@@ -108,80 +93,108 @@ function emergencyStop() {
 
 function finishDispense() {
     dispensing = false;
-
     document.querySelector('.btn-success').disabled = false;
     document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
 
-    showStatus('Dispensing completed successfully!', 'success');
-    updateHistory();
+    // Update backend
+    fetch('/complete', { method: 'POST' })
+        .then(() => {
+            showStatus('Dispensing completed successfully!', 'success');
+            updateHistory(); // refresh history
+        })
+        .catch(() => showStatus('Error updating status!', 'danger'));
 }
 
-
-        function showStatus(message, type = 'info') {
-            const statusBox = document.getElementById('statusBox');
-            statusBox.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
-            statusBox.className = `alert alert-${type}`;
-        }
-
-       function initChart() {
+// --- Chart Functions ---
+let timeStep = 0;
+function initChart() {
     const ctx = document.getElementById('flowChart').getContext('2d');
-
     flowChart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Flow Rate (ml/s)',
-                data: [],
-                borderWidth: 2,
-                tension: 0.3
-            }]
-        },
-        options: {
-            animation: false,
-            scales: {
-                x: { title: { display: true, text: 'Time (s)' } },
-                y: { title: { display: true, text: 'Flow Rate' }, min: 0 }
-            }
-        }
+        data: { labels: [], datasets: [{ label: 'Flow Rate (ml/s)', data: [], borderWidth: 2, tension: 0.3 }] },
+        options: { animation: false, scales: { x: { title: { display: true, text: 'Time (s)' } }, y: { title: { display: true, text: 'Flow Rate' }, min: 0 } } }
     });
 }
 
-
-        let timeStep = 0;
-
 function updateChart(progress) {
     if (!flowChart) return;
-
-    const flowRate = Math.max(0, 50 - progress * 0.4); // PID-like decay
-
+    const flowRate = Math.max(0, 50 - progress * 0.4);
     flowChart.data.labels.push(timeStep++);
     flowChart.data.datasets[0].data.push(flowRate);
-
     if (flowChart.data.labels.length > 20) {
         flowChart.data.labels.shift();
         flowChart.data.datasets[0].data.shift();
     }
-
     flowChart.update();
 }
 
+// --- Status ---
+function showStatus(message, type = 'info') {
+    const statusBox = document.getElementById('statusBox');
+    statusBox.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
+    statusBox.className = `alert alert-${type}`;
+}
 
-        function updateHistory() {
-            fetch('/history')
-                .then(response => response.json())
-                .then(data => {
-                    const list = document.getElementById('historyList');
-                    list.innerHTML = '';
-                    if (data.length === 0) {
-                        list.innerHTML = '<li class="list-group-item">No dispenses yet</li>';
-                        return;
-                    }
-                    data.slice(-5).reverse().forEach(item => {
-                        const li = document.createElement('li');
-                        li.className = 'list-group-item';
-                        li.textContent = `Water: ${item.water}ml | Syrup: ${item.syrup}ml`;
-                        list.appendChild(li);
-                    });
-                });
-        }
+// --- History & Pagination ---
+function updateHistory(page = 0) {
+    fetch('/history')
+        .then(res => res.json())
+        .then(events => {
+            const list = document.getElementById('historyList');
+            list.innerHTML = '';
+            if (events.length === 0) {
+                list.innerHTML = '<li class="list-group-item">No activity yet</li>';
+                return;
+            }
+
+            events.reverse(); // latest first
+            currentHistoryPage = page;
+
+            const start = page * historyPerPage;
+            const end = start + historyPerPage;
+            const pageEvents = events.slice(start, end);
+
+            pageEvents.forEach(event => {
+                const li = document.createElement('li');
+                li.classList.add('list-group-item');
+
+                if (event.type === 'DISPENSE') {
+                    li.classList.add('list-group-item-success');
+                    li.innerHTML = `🟢 <strong>DISPENSE</strong><br>${event.message}<br><small>⏱ ${event.timestamp}</small>`;
+                } else if (event.type === 'EMERGENCY') {
+                    li.classList.add('list-group-item-danger');
+                    li.innerHTML = `🔴 <strong>EMERGENCY STOP</strong><br>${event.message}<br><small>⏱ ${event.timestamp}</small>`;
+                } else {
+                    li.innerHTML = event.message;
+                }
+
+                list.appendChild(li);
+            });
+
+            // Pagination buttons
+            document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
+            document.getElementById('nextHistory').disabled = (end >= events.length);
+        });
+}
+
+function prevHistory() {
+    if (currentHistoryPage > 0) {
+        updateHistory(currentHistoryPage - 1);
+    }
+}
+
+function nextHistory() {
+    updateHistory(currentHistoryPage + 1);
+}
+
+// --- Initialize ---
+document.addEventListener('DOMContentLoaded', () => {
+    bindSlider('waterSlider', 'waterValue', 'waterTooltip');
+    bindSlider('syrupSlider', 'syrupValue', 'syrupTooltip');
+    updateTooltip('waterSlider', 'waterTooltip');
+    updateTooltip('syrupSlider', 'syrupTooltip');
+    initChart();
+
+    // ALWAYS load most recent dispense history on page load
+    updateHistory(0);
+});
