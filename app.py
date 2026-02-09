@@ -1,18 +1,32 @@
 from flask import Flask, render_template, request, jsonify
+from flask_socketio import SocketIO, emit
 import sqlite3
 from datetime import datetime
+import requests
+from threading import Thread
+import time
 
+# -------------------- FLASK APP --------------------
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret-key'
 
+# ADD SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# -------------------- ESP32 CONFIG --------------------
+ESP32_IP = "192.168.23.3"  # replace with your ESP32 IP
+esp32_connected = False
+
+# -------------------- CONFIGURATION --------------------
 DB_NAME = "history.db"
 
 # -------------------- DATABASE HELPERS --------------------
-
 def get_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
+# -------------------- DATABASE INITIALIZATION --------------------
 def init_db():
     conn = get_db()
     cur = conn.cursor()
@@ -31,38 +45,43 @@ def init_db():
     )
     """)
 
-    # Safe migration
-    cur.execute("PRAGMA table_info(dispensing_log)")
-    columns = [col[1] for col in cur.fetchall()]
-
-    def add_column(name, dtype):
-        if name not in columns:
-            cur.execute(f"ALTER TABLE dispensing_log ADD COLUMN {name} {dtype}")
-
-    for col, dtype in [
-        ("start_time", "TEXT"),
-        ("end_time", "TEXT"),
-        ("target_water_ml", "REAL"),
-        ("dispensed_water_ml", "REAL"),
-        ("target_syrup_ml", "REAL"),
-        ("dispensed_syrup_ml", "REAL"),
-        ("status", "TEXT"),
-        ("stop_reason", "TEXT")
-    ]:
-        add_column(col, dtype)
-
     conn.commit()
     conn.close()
 
-
 # -------------------- ROUTES --------------------
-
 @app.route('/')
 def home():
     return render_template('index.html')
 
+# -------------------- SOCKET EVENTS --------------------
+@socketio.on('connect')
+def client_connected():
+    emit('esp32_status', {'connected': esp32_connected})
 
-# -------- START DISPENSING --------
+# -------------------- ESP32 MONITORING THREAD --------------------
+def monitor_esp32():
+    global esp32_connected
+    while True:
+        try:
+            r = requests.get(f"http://{ESP32_IP}/ping", timeout=1)
+            if r.status_code == 200:
+                if not esp32_connected:
+                    esp32_connected = True
+                    socketio.emit('esp32_status', {'connected': True}, broadcast=True)
+            else:
+                if esp32_connected:
+                    esp32_connected = False
+                    socketio.emit('esp32_status', {'connected': False}, broadcast=True)
+        except requests.RequestException:
+            if esp32_connected:
+                esp32_connected = False
+                socketio.emit('esp32_status', {'connected': False}, broadcast=True)
+        time.sleep(2)  # check every 2 seconds
+
+# Start monitoring in background thread
+Thread(target=monitor_esp32, daemon=True).start()
+
+# -------------------- START DISPENSING --------------------
 @app.route('/dispense', methods=['POST'])
 def dispense():
     data = request.get_json()
@@ -91,10 +110,9 @@ def dispense():
     conn.commit()
     conn.close()
 
-    return jsonify({"status": "started", "message": "Dispensing started"})
+    return jsonify({"status": "started"})
 
-
-# -------- UPDATE PROGRESS --------
+# -------------------- UPDATE PROGRESS --------------------
 @app.route('/update-progress', methods=['POST'])
 def update_progress():
     data = request.get_json()
@@ -102,27 +120,27 @@ def update_progress():
     conn = get_db()
     cur = conn.cursor()
 
-    # Fetch last IN_PROGRESS dispense
-    cur.execute("SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1")
+    cur.execute(
+        "SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1"
+    )
     row = cur.fetchone()
+
     if row:
-        dispense_id = row["id"]
         cur.execute("""
             UPDATE dispensing_log
-            SET dispensed_water_ml = ?, dispensed_syrup_ml = ?
-            WHERE id = ?
+            SET dispensed_water_ml=?, dispensed_syrup_ml=?
+            WHERE id=?
         """, (
             data.get("water_dispensed", 0),
             data.get("syrup_dispensed", 0),
-            dispense_id
+            row["id"]
         ))
 
     conn.commit()
     conn.close()
     return jsonify({"status": "updated"})
 
-
-# -------- EMERGENCY STOP --------
+# -------------------- EMERGENCY STOP --------------------
 @app.route('/emergency-stop', methods=['POST'])
 def emergency_stop():
     data = request.get_json()
@@ -130,63 +148,61 @@ def emergency_stop():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1")
+    cur.execute(
+        "SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1"
+    )
     row = cur.fetchone()
+
     if row:
-        dispense_id = row["id"]
         cur.execute("""
             UPDATE dispensing_log
-            SET end_time = ?, status='EMERGENCY_STOP', stop_reason=?
-            WHERE id = ?
+            SET end_time=?, status='EMERGENCY_STOP', stop_reason=?
+            WHERE id=?
         """, (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             data.get("reason", "Emergency stop pressed"),
-            dispense_id
+            row["id"]
         ))
 
     conn.commit()
     conn.close()
-    return jsonify({"status": "stopped", "message": "Emergency stop recorded"})
+    return jsonify({"status": "stopped"})
 
-
-# -------- NORMAL COMPLETION --------
+# -------------------- COMPLETE --------------------
 @app.route('/complete', methods=['POST'])
 def complete_dispense():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1")
+    cur.execute(
+        "SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1"
+    )
     row = cur.fetchone()
+
     if row:
-        dispense_id = row["id"]
         cur.execute("""
             UPDATE dispensing_log
-            SET end_time = ?, status='COMPLETED'
-            WHERE id = ?
+            SET end_time=?, status='COMPLETED'
+            WHERE id=?
         """, (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            dispense_id
+            row["id"]
         ))
 
     conn.commit()
     conn.close()
     return jsonify({"status": "completed"})
 
-
-# -------- FETCH HISTORY --------
+# -------------------- FETCH HISTORY --------------------
 @app.route('/history')
 def get_history():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT *
-        FROM dispensing_log
-        ORDER BY id DESC
-    """)
+    cur.execute("SELECT * FROM dispensing_log ORDER BY id DESC")
     rows = cur.fetchall()
-    events = []
 
+    events = []
     for r in rows:
         r = dict(r)
         if r['status'] == 'IN_PROGRESS':
@@ -211,8 +227,7 @@ def get_history():
     conn.close()
     return jsonify(events)
 
-
 # -------------------- MAIN --------------------
 if __name__ == '__main__':
     init_db()
-    app.run(debug=True, port=5000)
+    socketio.run(app, debug=True, port=5000)

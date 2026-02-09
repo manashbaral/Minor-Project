@@ -4,6 +4,7 @@ let dispensing = false;
 let progressInterval = null;
 let currentHistoryPage = 0;      // current page index
 const historyPerPage = 3;        // logs per page
+let timeStep = 0;
 
 // --- Slider Helper ---
 function bindSlider(sliderId, valueId, tooltipId) {
@@ -96,17 +97,15 @@ function finishDispense() {
     document.querySelector('.btn-success').disabled = false;
     document.getElementById('dispenseBtnText').textContent = '🚀 Start Dispensing';
 
-    // Update backend
     fetch('/complete', { method: 'POST' })
         .then(() => {
             showStatus('Dispensing completed successfully!', 'success');
-            updateHistory(); // refresh history
+            updateHistory();
         })
         .catch(() => showStatus('Error updating status!', 'danger'));
 }
 
 // --- Chart Functions ---
-let timeStep = 0;
 function initChart() {
     const ctx = document.getElementById('flowChart').getContext('2d');
     flowChart = new Chart(ctx, {
@@ -171,30 +170,48 @@ function updateHistory(page = 0) {
                 list.appendChild(li);
             });
 
-            // Pagination buttons
             document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
             document.getElementById('nextHistory').disabled = (end >= events.length);
         });
 }
 
 function prevHistory() {
-    if (currentHistoryPage > 0) {
-        updateHistory(currentHistoryPage - 1);
-    }
+    if (currentHistoryPage > 0) updateHistory(currentHistoryPage - 1);
 }
-
 function nextHistory() {
     updateHistory(currentHistoryPage + 1);
 }
 
-// --- Initialize ---
+// --- Initialize Sliders, Chart, History ---
 document.addEventListener('DOMContentLoaded', () => {
     bindSlider('waterSlider', 'waterValue', 'waterTooltip');
     bindSlider('syrupSlider', 'syrupValue', 'syrupTooltip');
     updateTooltip('waterSlider', 'waterTooltip');
     updateTooltip('syrupSlider', 'syrupTooltip');
     initChart();
+    updateHistory();
+});
 
-    // ALWAYS load most recent dispense history on page load
-    updateHistory(0);
+// --- WebSocket for ESP32 Status ---
+const socket = io();
+
+socket.on('connect', () => console.log('Socket connected'));
+socket.on('disconnect', () => {
+    const statusSpan = document.getElementById('connectionStatus');
+    if (!statusSpan) return;
+    statusSpan.textContent = '🔴 ESP32 Disconnected';
+    statusSpan.className = 'text-danger fw-bold';
+});
+
+socket.on('esp32_status', data => {
+    const statusSpan = document.getElementById('connectionStatus');
+    if (!statusSpan) return;
+
+    if (data.connected) {
+        statusSpan.textContent = '🟢 ESP32 Connected';
+        statusSpan.className = 'text-success fw-bold';
+    } else {
+        statusSpan.textContent = '🟡 Reconnecting to ESP32...';
+        statusSpan.className = 'text-warning fw-bold';
+    }
 });
