@@ -192,26 +192,24 @@ document.addEventListener('DOMContentLoaded', () => {
     updateHistory();
 });
 
-// --- WebSocket for ESP32 Status ---
-const socket = io();
+function checkESP32Status() {
+    fetch('/esp32/status')
+        .then(res => res.json())
+        .then(data => {
+            const statusSpan = document.getElementById('connectionStatus');
+            if (data.connected) {
+                statusSpan.textContent = '🟢 ESP32 Connected';
+                statusSpan.className = 'text-success fw-bold';
+            } else {
+                statusSpan.textContent = '🔴 ESP32 Disconnected';
+                statusSpan.className = 'text-danger fw-bold';
+            }
+        })
+        .catch(() => {
+            document.getElementById('connectionStatus').textContent = '🔴 ESP32 Disconnected';
+        });
+}
 
-socket.on('connect', () => console.log('Socket connected'));
-socket.on('disconnect', () => {
-    const statusSpan = document.getElementById('connectionStatus');
-    if (!statusSpan) return;
-    statusSpan.textContent = '🔴 ESP32 Disconnected';
-    statusSpan.className = 'text-danger fw-bold';
-});
-
-socket.on('esp32_status', data => {
-    const statusSpan = document.getElementById('connectionStatus');
-    if (!statusSpan) return;
-
-    if (data.connected) {
-        statusSpan.textContent = '🟢 ESP32 Connected';
-        statusSpan.className = 'text-success fw-bold';
-    } else {
-        statusSpan.textContent = '🟡 Reconnecting to ESP32...';
-        statusSpan.className = 'text-warning fw-bold';
-    }
-});
+// Poll every 2 seconds
+setInterval(checkESP32Status, 500);
+document.addEventListener('DOMContentLoaded', checkESP32Status);
