@@ -45,32 +45,50 @@ function startDispensing() {
     const water = Number(document.getElementById('waterSlider').value);
     const syrup = Number(document.getElementById('syrupSlider').value);
 
-    dispensing = true;
-    document.querySelector('.btn-success').disabled = true;
-    document.getElementById('dispenseBtnText').textContent = '⏳ Dispensing...';
-    showStatus(`Dispensing ${water} ml Water & ${syrup} ml Syrup`, 'warning');
-
-    const progressBar = document.getElementById('progressBar');
-    document.getElementById('progressContainer').style.display = 'block';
-
-    let progress = 0;
-    progressInterval = setInterval(() => {
-        progress += 2;
-        progressBar.style.width = progress + '%';
-        progressBar.textContent = progress + '%';
-        updateChart(progress);
-
-        if (progress >= 100) {
-            clearInterval(progressInterval);
-            finishDispense();
-        }
-    }, 200);
-
     fetch('/dispense', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ water, syrup })
-    }).catch(() => emergencyStop());
+    })
+    .then(async response => {
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.message || "Server rejected request");
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.status !== "started") {
+            throw new Error(data.message || "Failed to start dispensing");
+        }
+
+        //  ONLY START UI AFTER BACKEND CONFIRMS
+        dispensing = true;
+
+        document.querySelector('.btn-success').disabled = true;
+        document.getElementById('dispenseBtnText').textContent = '⏳ Dispensing...';
+        showStatus(`Dispensing ${water} ml Water & ${syrup} ml Syrup`, 'warning');
+
+        const progressBar = document.getElementById('progressBar');
+        document.getElementById('progressContainer').style.display = 'block';
+
+        let progress = 0;
+        progressInterval = setInterval(() => {
+            progress += 2;
+            progressBar.style.width = progress + '%';
+            progressBar.textContent = progress + '%';
+            updateChart(progress);
+
+            if (progress >= 100) {
+                clearInterval(progressInterval);
+                finishDispense();
+            }
+        }, 200);
+    })
+    .catch(error => {
+        console.error(error);
+        showStatus(error.message, 'Warning');
+    });
 }
 
 function emergencyStop() {
@@ -154,21 +172,52 @@ function updateHistory(page = 0) {
             const pageEvents = events.slice(start, end);
 
             pageEvents.forEach(event => {
-                const li = document.createElement('li');
-                li.classList.add('list-group-item');
+            const li = document.createElement('li');
+            li.classList.add(
+                'list-group-item',
+                'd-flex',
+                'justify-content-between',
+                'align-items-start'
+            );
 
-                if (event.type === 'DISPENSE') {
-                    li.classList.add('list-group-item-success');
-                    li.innerHTML = `🟢 <strong>DISPENSE</strong><br>${event.message}<br><small>⏱ ${event.timestamp}</small>`;
-                } else if (event.type === 'EMERGENCY') {
-                    li.classList.add('list-group-item-danger');
-                    li.innerHTML = `🔴 <strong>EMERGENCY STOP</strong><br>${event.message}<br><small>⏱ ${event.timestamp}</small>`;
-                } else {
-                    li.innerHTML = event.message;
-                }
+            // LEFT SIDE (content)
+            const contentDiv = document.createElement('div');
 
-                list.appendChild(li);
-            });
+            if (event.type === 'DISPENSE') {
+                li.classList.add('list-group-item-success');
+                contentDiv.innerHTML = `
+                    🟢 <strong>DISPENSE</strong><br>
+                    ${event.message}<br>
+                    <small>⏱ ${event.timestamp}</small>
+                `;
+            } 
+            else if (event.type === 'EMERGENCY') {
+                li.classList.add('list-group-item-danger');
+                contentDiv.innerHTML = `
+                    🔴 <strong>EMERGENCY STOP</strong><br>
+                    ${event.message}<br>
+                    <small>⏱ ${event.timestamp}</small>
+                `;
+            } 
+            else {
+                contentDiv.innerHTML = event.message;
+            }
+
+            // RIGHT SIDE (delete button)
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = "btn btn-sm btn-outline-danger";
+            deleteBtn.innerHTML = "🗑";
+            deleteBtn.onclick = function () {
+                deleteHistory(event.id);
+            };
+
+            // Add both to list item
+            li.appendChild(contentDiv);
+            li.appendChild(deleteBtn);
+
+            list.appendChild(li);
+        });
+
 
             document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
             document.getElementById('nextHistory').disabled = (end >= events.length);
@@ -181,6 +230,62 @@ function prevHistory() {
 function nextHistory() {
     updateHistory(currentHistoryPage + 1);
 }
+
+function deleteHistory(id) {
+    if (!confirm("Delete this record?")) return;
+
+    fetch(`/delete-history/${id}`, {
+        method: 'DELETE'
+    })
+    .then(async response => {
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.message || "Delete failed");
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.status === "success") {
+            showStatus("Record deleted.", "success");
+            updateHistory(currentHistoryPage);
+        } else {
+            throw new Error(data.message || "Error deleting record");
+        }
+    })
+    .catch(error => {
+        console.error(error);
+        showStatus(error.message, "danger");
+    });
+}
+
+
+function clearHistory() {
+    if (!confirm("Are you sure you want to clear all history?")) return;
+
+    fetch('/clear-history', {
+        method: 'POST'
+    })
+    .then(async response => {
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.message || "Failed to clear history");
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.status === "success") {
+            showStatus("History cleared successfully.", "success");
+            updateHistory(0);   // reset to first page
+        } else {
+            throw new Error(data.message || "Error clearing history");
+        }
+    })
+    .catch(error => {
+        console.error(error);
+        showStatus(error.message, "danger");
+    });
+}
+
 
 // --- Initialize Sliders, Chart, History ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -210,6 +315,6 @@ function checkESP32Status() {
         });
 }
 
-// Poll every 2 seconds
+// Poll every 0.5 seconds
 setInterval(checkESP32Status, 500);
 document.addEventListener('DOMContentLoaded', checkESP32Status);

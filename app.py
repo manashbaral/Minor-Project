@@ -9,7 +9,7 @@ app = Flask(__name__)
 DB_NAME = "history.db"
 
 # -------------------- ESP32 configuration --------------------
-ESP32_IP = "192.168.1.103"   # your ESP32 IP
+ESP32_IP = "192.168.85.3"   # your ESP32 IP
 esp32_connected = False
 esp32_last_seen = None
 
@@ -51,11 +51,14 @@ def esp32_heartbeat():
 @app.route('/esp32/status')
 def esp32_status():
     global esp32_connected, esp32_last_seen
+
     if esp32_last_seen and (datetime.now() - esp32_last_seen).seconds < 10:
         esp32_connected = True
     else:
         esp32_connected = False
-    return jsonify({"connected": esp32_connected})
+
+    if not esp32_connected:
+        return jsonify({"status": "error", "message": "ESP32 not connected"}), 503
 
 # -------------------- Command ESP32 --------------------
 def send_command_to_esp32(endpoint, params=None):
@@ -84,24 +87,27 @@ def dispense():
     water = data['water']
     syrup = data['syrup']
 
-    # Insert log record
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    INSERT INTO dispensing_log (start_time, target_water_ml, dispensed_water_ml,
-                                target_syrup_ml, dispensed_syrup_ml, status)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), water, 0, syrup, 0, "IN_PROGRESS"))
-    conn.commit()
-    conn.close()
+    if  esp32_connected==False:
+        return jsonify({"status": "error", "message": "ESP32 not connected"}), 503
+    else:
+        # Insert log record
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO dispensing_log (start_time, target_water_ml, dispensed_water_ml,
+                                    target_syrup_ml, dispensed_syrup_ml, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), water, 0, syrup, 0, "IN_PROGRESS"))
+        conn.commit()
+        conn.close()
 
-    # Send command to ESP32
-    success, message = send_command_to_esp32("start", {"water": water, "syrup": syrup})
-    if not success:
-        # Log failure but still return started? Decide: maybe mark as failed.
-        print(f"⚠️ Failed to command ESP32: {message}")
+        # Send command to ESP32
+        success, message = send_command_to_esp32("start", {"water": water, "syrup": syrup})
+        if not success:
+            # Log failure but still return started? Decide: maybe mark as failed.
+            print(f"⚠️ Failed to command ESP32: {message}")
 
-    return jsonify({"status": "started", "esp32_command": message if not success else "sent"})
+        return jsonify({"status": "started", "esp32_command": message if not success else "sent"})
 
 # -------------------- Emergency Stop --------------------
 @app.route('/emergency-stop', methods=['POST'])
@@ -186,12 +192,41 @@ def get_history():
             message = "Unknown status"
             type_ = "INFO"
         events.append({
+            "id": r['id'], 
             "timestamp": r['start_time'],
             "type": type_,
             "message": message
         })
+
     conn.close()
     return jsonify(events)
+
+# -------------------- Clear History --------------------
+@app.route('/clear-history', methods=['POST'])
+def clear_history():
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM dispensing_log")
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# -------------------- Delete Single History Record --------------------
+@app.route('/delete-history/<int:record_id>', methods=['DELETE'])
+def delete_history(record_id):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM dispensing_log WHERE id=?", (record_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # -------------------- Main --------------------
 if __name__ == '__main__':
