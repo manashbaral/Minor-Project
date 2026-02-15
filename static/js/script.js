@@ -40,6 +40,12 @@ function setPreset(water, syrup) {
 
 // --- Dispensing Functions ---
 function startDispensing() {
+    const statusSpan = document.getElementById('connectionStatus');
+    if (statusSpan.classList.contains('text-danger')) {
+        showStatus("Cannot start: ESP32 is disconnected!", "danger");
+        return;
+    }
+
     if (dispensing) return;
 
     const water = Number(document.getElementById('waterSlider').value);
@@ -62,9 +68,7 @@ function startDispensing() {
             throw new Error(data.message || "Failed to start dispensing");
         }
 
-        //  ONLY START UI AFTER BACKEND CONFIRMS
         dispensing = true;
-
         document.querySelector('.btn-success').disabled = true;
         document.getElementById('dispenseBtnText').textContent = '⏳ Dispensing...';
         showStatus(`Dispensing ${water} ml Water & ${syrup} ml Syrup`, 'warning');
@@ -87,7 +91,7 @@ function startDispensing() {
     })
     .catch(error => {
         console.error(error);
-        showStatus(error.message, 'Warning');
+        showStatus(error.message, 'danger');
     });
 }
 
@@ -180,7 +184,6 @@ function updateHistory(page = 0) {
                 'align-items-start'
             );
 
-            // LEFT SIDE (content)
             const contentDiv = document.createElement('div');
 
             if (event.type === 'DISPENSE') {
@@ -190,20 +193,17 @@ function updateHistory(page = 0) {
                     ${event.message}<br>
                     <small>⏱ ${event.timestamp}</small>
                 `;
-            } 
-            else if (event.type === 'EMERGENCY') {
+            } else if (event.type === 'EMERGENCY') {
                 li.classList.add('list-group-item-danger');
                 contentDiv.innerHTML = `
                     🔴 <strong>EMERGENCY STOP</strong><br>
                     ${event.message}<br>
                     <small>⏱ ${event.timestamp}</small>
                 `;
-            } 
-            else {
+            } else {
                 contentDiv.innerHTML = event.message;
             }
 
-            // RIGHT SIDE (delete button)
             const deleteBtn = document.createElement('button');
             deleteBtn.className = "btn btn-sm btn-outline-danger";
             deleteBtn.innerHTML = "🗑";
@@ -211,17 +211,14 @@ function updateHistory(page = 0) {
                 deleteHistory(event.id);
             };
 
-            // Add both to list item
             li.appendChild(contentDiv);
             li.appendChild(deleteBtn);
-
             list.appendChild(li);
         });
 
-
-            document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
-            document.getElementById('nextHistory').disabled = (end >= events.length);
-        });
+        document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
+        document.getElementById('nextHistory').disabled = (end >= events.length);
+    });
 }
 
 function prevHistory() {
@@ -258,34 +255,30 @@ function deleteHistory(id) {
     });
 }
 
-
 function clearHistory() {
     if (!confirm("Are you sure you want to clear all history?")) return;
 
-    fetch('/clear-history', {
-        method: 'POST'
-    })
-    .then(async response => {
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.message || "Failed to clear history");
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data.status === "success") {
-            showStatus("History cleared successfully.", "success");
-            updateHistory(0);   // reset to first page
-        } else {
-            throw new Error(data.message || "Error clearing history");
-        }
-    })
-    .catch(error => {
-        console.error(error);
-        showStatus(error.message, "danger");
-    });
+    fetch('/clear-history', { method: 'POST' })
+        .then(async response => {
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.message || "Failed to clear history");
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === "success") {
+                showStatus("History cleared successfully.", "success");
+                updateHistory(0);
+            } else {
+                throw new Error(data.message || "Error clearing history");
+            }
+        })
+        .catch(error => {
+            console.error(error);
+            showStatus(error.message, "danger");
+        });
 }
-
 
 // --- Initialize Sliders, Chart, History ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -297,24 +290,33 @@ document.addEventListener('DOMContentLoaded', () => {
     updateHistory();
 });
 
+// --- ESP32 Status Check ---
+function updateESP32ButtonState() {
+    const button = document.querySelector('.btn-success');
+    const statusSpan = document.getElementById('connectionStatus');
+    button.disabled = statusSpan.classList.contains('text-danger');
+}
+
 function checkESP32Status() {
-    fetch('/esp32/status')
+    fetch('/esp32/status', { cache: 'no-store' })
         .then(res => res.json())
         .then(data => {
             const statusSpan = document.getElementById('connectionStatus');
-            if (data.connected) {
-                statusSpan.textContent = '🟢 ESP32 Connected';
-                statusSpan.className = 'text-success fw-bold';
-            } else {
-                statusSpan.textContent = '🔴 ESP32 Disconnected';
-                statusSpan.className = 'text-danger fw-bold';
-            }
+            const connected = data.status === "connected";
+
+            statusSpan.textContent = connected ? '🟢 ESP32 Connected' : '🔴 ESP32 Disconnected';
+            statusSpan.className = connected ? 'text-success fw-bold' : 'text-danger fw-bold';
+
+            updateESP32ButtonState();
         })
         .catch(() => {
-            document.getElementById('connectionStatus').textContent = '🔴 ESP32 Disconnected';
+            const statusSpan = document.getElementById('connectionStatus');
+            statusSpan.textContent = '🔴 ESP32 Disconnected';
+            statusSpan.className = 'text-danger fw-bold';
+            updateESP32ButtonState();
         });
 }
 
-// Poll every 0.5 seconds
+// Poll ESP32 status every 0.5 seconds
 setInterval(checkESP32Status, 500);
 document.addEventListener('DOMContentLoaded', checkESP32Status);
