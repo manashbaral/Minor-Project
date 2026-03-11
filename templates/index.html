@@ -1,143 +1,373 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Liquid Dispenser</title>
-    <!-- Bootstrap 5 CSS -->
+    <title>Automated Multi-Reagent Dispensing System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- link to style.css -->
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static',filename='css/style.css') }}">
-    <!-- Chart.js for graphs -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<!-- Your custom JS -->
-<script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
-
-
-   
+    <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
 </head>
 <body>
-    <div class="container py-4">
-        <!-- Header -->
-        <div class="text-center mb-4">
-            <h1 class="text-primary">Smart Liquid Dispenser</h1>
-            <p class="lead">Web-controlled PID-based dispensing system</p>
-            <div class="alert alert-secondary">
-                <strong>Status:</strong> <span id="connectionStatus">🔌 Connecting to ESP32...</span>
+<div class="container py-4">
+
+    <!-- Header -->
+    <div class="mb-4 lab-header">
+        <!-- Top bar: operator info + controls -->
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="operator-info">
+                <span class="operator-icon">👤</span>
+                <span class="operator-name" id="operatorName">{{ username }}</span>
+                <span class="role-badge role-{{ role }}" id="roleBadge">{{ role | upper }}</span>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+                {% if role == 'admin' %}
+                <button class="btn btn-sm lab-mgmt-btn" onclick="openUserModal()">⚙ Manage Users</button>
+                {% endif %}
+                <button class="btn btn-sm dark-toggle-btn" onclick="toggleDarkMode()">
+                    <span id="darkModeIcon">🌙 Dark Mode</span>
+                </button>
+                <button class="btn btn-sm btn-outline-danger logout-btn" onclick="doLogout()">⏏ Logout</button>
             </div>
         </div>
 
-        <div class="row">
-            <!-- Left: Control Panel -->
-            <div class="col-md-6">
-                <div class="card shadow">
-                    <div class="card-header bg-primary text-white">
-                        <h4>Control Panel</h4>
+        <!-- Title block -->
+        <div class="text-center">
+            <div class="lab-badge mb-2">LABORATORY INSTRUMENT</div>
+            <h1 class="system-title">Automated Multi-Reagent<br>Dispensing System</h1>
+            <p class="system-subtitle">PID-Controlled Precision Dispensing · ESP32 + Flask</p>
+            <div class="status-bar mt-3">
+                <span class="status-label">DEVICE STATUS</span>
+                <span id="connectionStatus" class="status-value">⬤ Connecting to Controller...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Left: Control Panel -->
+        <div class="col-md-6">
+            <div class="card lab-card shadow">
+                <div class="card-header lab-card-header">
+                    <h4 class="mb-0">⚙ Control Panel</h4>
+                </div>
+                <div class="card-body">
+
+                    <!-- Reagent A Control -->
+                    <div class="reagent-card reagent-a">
+                        <div class="reagent-label">
+                            <span class="reagent-icon">🧪</span>
+                            <span class="reagent-name" id="labelReagentA">Reagent A</span>
+                            <span class="reagent-unit">(ml)</span>
+                            <button class="btn btn-xs rename-btn ms-2" onclick="openRenameModal('A')" title="Rename">✏</button>
+                        </div>
+                        <div class="slider-container mt-2">
+                            <input type="range" class="form-range lab-range" id="waterSlider" min="0" max="500" value="100">
+                            <span class="slider-tooltip" id="waterTooltip">100</span>
+                        </div>
+                        <div class="d-flex justify-content-between range-labels">
+                            <span>0 ml</span>
+                            <strong><span id="waterValue">100</span> ml</strong>
+                            <span>500 ml</span>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <!-- Water Control -->
-                        <div class="liquid-card water">
-                            <h5>💧 Water</h5>
-                            <div class="slider-container">
-                                <input type="range" class="form-range" id="waterSlider" min="0" max="500" value="100">
-                                <span class="slider-tooltip" id="waterTooltip">100</span>
-                            </div>
-                            <div class="d-flex justify-content-between">
-                                <span>0 ml</span>
-                                <strong><span id="waterValue">100</span> ml</strong>
-                                <span>500 ml</span>
-                            </div>
-                        </div>
 
-                        <!-- Syrup Control -->
-                        <div class="liquid-card syrup">
-                            <h5>🍯 Syrup</h5>
-                            <div class="slider-container">
-                                <input type="range" class="form-range" id="syrupSlider" min="0" max="500" value="50">
-                                <span class="slider-tooltip" id="syrupTooltip">50</span>
-                            </div>
-                            <div class="d-flex justify-content-between">
-                                <span>0 ml</span>
-                                <strong><span id="syrupValue">50</span> ml</strong>
-                                <span>500 ml</span>
-                            </div>
+                    <!-- Reagent B Control -->
+                    <div class="reagent-card reagent-b">
+                        <div class="reagent-label">
+                            <span class="reagent-icon">🧫</span>
+                            <span class="reagent-name" id="labelReagentB">Reagent B</span>
+                            <span class="reagent-unit">(ml)</span>
+                            <button class="btn btn-xs rename-btn ms-2" onclick="openRenameModal('B')" title="Rename">✏</button>
                         </div>
+                        <div class="slider-container mt-2">
+                            <input type="range" class="form-range lab-range" id="syrupSlider" min="0" max="500" value="50">
+                            <span class="slider-tooltip" id="syrupTooltip">50</span>
+                        </div>
+                        <div class="d-flex justify-content-between range-labels">
+                            <span>0 ml</span>
+                            <strong><span id="syrupValue">50</span> ml</strong>
+                            <span>500 ml</span>
+                        </div>
+                    </div>
 
-                        <!-- Quick Presets -->
-                        <div class="mt-3">
-                            <label class="form-label">Quick Presets:</label>
-                            <div class="btn-group w-100">
-                                <button class="btn btn-outline-primary" onclick="setPreset(200, 50)">Coke (200W+50S)</button>
-                                <button class="btn btn-outline-success" onclick="setPreset(150, 100)">Lemonade</button>
-                                <button class="btn btn-outline-warning" onclick="setPreset(300, 0)">Just Water</button>
-                            </div>
+                    <!-- Volume & Ratio Summary -->
+                    <div class="summary-box mt-3" id="summaryBox">
+                        <div class="summary-row">
+                            <span class="summary-item">
+                                <span class="summary-dot dot-a"></span>
+                                <span id="summaryLabelA">Reagent A</span>:
+                                <strong id="summaryVolA">100 ml</strong>
+                            </span>
+                            <span class="summary-sep">+</span>
+                            <span class="summary-item">
+                                <span class="summary-dot dot-b"></span>
+                                <span id="summaryLabelB">Reagent B</span>:
+                                <strong id="summaryVolB">50 ml</strong>
+                            </span>
+                            <span class="summary-sep">=</span>
+                            <span class="summary-total">Total: <strong id="summaryTotal">150 ml</strong></span>
                         </div>
+                        <div class="summary-ratio mt-1">
+                            Ratio A:B = <strong id="summaryRatio">2:1</strong>
+                        </div>
+                    </div>
 
-                        <!-- Action Buttons -->
-                        <div class="mt-4 text-center">
-                            <button class="btn btn-success btn-lg px-5" onclick="startDispensing()">
-                                <span id="dispenseBtnText">Start Dispensing</span>
-                            </button>
-                            <button class="btn btn-danger btn-lg ms-2" onclick="emergencyStop()">
-                                ⛔ Emergency Stop
-                            </button>
+                    <!-- Protocol Presets -->
+                    <div class="mt-3">
+                        <label class="form-label preset-label">Standard Protocols:</label>
+                        <div class="btn-group w-100 flex-wrap" role="group">
+                            <button class="btn btn-outline-secondary lab-preset-btn" onclick="setPreset(200, 50)">Buffer Solution</button>
+                            <button class="btn btn-outline-secondary lab-preset-btn" onclick="setPreset(150, 100)">Sample Dilution</button>
+                            <button class="btn btn-outline-secondary lab-preset-btn" onclick="setPreset(300, 0)">Reagent A Only</button>
                         </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="mt-4 text-center d-flex justify-content-center gap-3">
+                        <button class="btn btn-success lab-action-btn" onclick="startDispensing()">
+                            <span id="dispenseBtnText">▶ Initiate Dispense</span>
+                        </button>
+                        <button class="btn btn-danger lab-action-btn" onclick="emergencyStop()">
+                            ■ Emergency Stop
+                        </button>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Monitoring -->
+        <div class="col-md-6">
+            <div class="card lab-card shadow mb-4">
+                <div class="card-header lab-card-header-info">
+                    <h4 class="mb-0">📊 Live Monitoring</h4>
+                </div>
+                <div class="card-body">
+                    <div class="lab-status-box" id="statusBox">
+                        System ready. Configure volumes and initiate dispense sequence.
+                    </div>
+
+                    <!-- Pump Status Indicators -->
+                    <div class="pump-status-row mt-3">
+                        <div class="pump-indicator" id="pump1Indicator">
+                            <span class="pump-dot" id="pump1Dot"></span>
+                            <span class="pump-label">PUMP 1</span>
+                            <span class="pump-reagent" id="pump1ReagentLabel">Reagent A</span>
+                            <span class="pump-state" id="pump1State">IDLE</span>
+                        </div>
+                        <div class="pump-divider">→</div>
+                        <div class="pump-indicator" id="pump2Indicator">
+                            <span class="pump-dot" id="pump2Dot"></span>
+                            <span class="pump-label">PUMP 2</span>
+                            <span class="pump-reagent" id="pump2ReagentLabel">Reagent B</span>
+                            <span class="pump-state" id="pump2State">IDLE</span>
+                        </div>
+                    </div>
+
+                    <!-- Pump Sequence Timeline -->
+                    <div class="sequence-timeline mt-3">
+                        <div class="seq-step">
+                            <div class="seq-block seq-a" id="seqBlock1">
+                                <span id="seqLabel1">PUMP 1</span>
+                            </div>
+                            <div class="seq-sub" id="seqVol1">—</div>
+                        </div>
+                        <div class="seq-arrow">→</div>
+                        <div class="seq-pause" id="seqPause">2s</div>
+                        <div class="seq-arrow">→</div>
+                        <div class="seq-step">
+                            <div class="seq-block seq-b" id="seqBlock2">
+                                <span id="seqLabel2">PUMP 2</span>
+                            </div>
+                            <div class="seq-sub" id="seqVol2">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div id="progressContainer" style="display: none;" class="mt-3">
+                        <div class="progress-label-row">
+                            <span class="progress-stage-label" id="progressStageLabel"></span>
+                            <span class="progress-pct" id="progressPct">0%</span>
+                        </div>
+                        <div class="progress lab-progress mt-1">
+                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                                 style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <canvas id="flowChart"></canvas>
                     </div>
                 </div>
             </div>
 
-            <!-- Right: Monitoring -->
-            <div class="col-md-6">
-                <!-- Progress & Status -->
-                <div class="card shadow mb-4">
-                    <div class="card-header bg-info text-white">
-                        <h4>Live Monitoring</h4>
-                    </div>
-                    <div class="card-body">
-                        <div class="alert alert-info" id="statusBox">
-                            System Ready. Set volumes and click "Start Dispensing".
-                        </div>
-                        <div class="progress mt-3" id="progressContainer" style="display: none;">
-                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
-                                 style="width: 0%">0%</div>
-                        </div>
-                        <div class="mt-3">
-                            <canvas id="flowChart"></canvas>
-                        </div>
+            <!-- Dispense Log -->
+            <div class="card lab-card shadow">
+                <div class="card-header lab-card-header-sec d-flex justify-content-between align-items-center">
+                    <h4 class="mb-0">🗒 Dispense Log</h4>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-outline-info" onclick="exportCSV()">⬇ CSV</button>
+                        <button class="btn btn-sm btn-outline-danger admin-only" onclick="clearHistory()">Clear Log</button>
                     </div>
                 </div>
-
-       <!-- History Log -->
-<div class="card shadow">
-    <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
-    <h4 class="mb-0">Recent Dispenses</h4>
-    <button class="btn btn-sm btn-danger" onclick="clearHistory()">
-        🗑 Clear
-    </button>
-</div>
-</div>
-
-    <div class="card-body d-flex flex-column">
-        <!-- History List -->
-        <ul class="list-group mb-2" id="historyList">
-            <li class="list-group-item">No dispenses yet</li>
-        </ul>
-
-        <!-- Pagination Buttons -->
-        <div id="historyPagination">
-            <button id="prevHistory" class="btn btn-secondary btn-sm" onclick="prevHistory()">⬅ Previous</button>
-            <button id="nextHistory" class="btn btn-secondary btn-sm" onclick="nextHistory()">Next ➡</button>
+                <div class="card-body d-flex flex-column">
+                    <ul class="list-group mb-2" id="historyList">
+                        <li class="list-group-item lab-log-empty">No dispense records found</li>
+                    </ul>
+                    <div id="historyPagination">
+                        <button id="prevHistory" class="btn btn-secondary btn-sm" onclick="prevHistory()">◀ Previous</button>
+                        <button id="nextHistory" class="btn btn-secondary btn-sm" onclick="nextHistory()">Next ▶</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
-</div>
-        </div>
-    </div>
 
 <!-- Footer -->
-<div class="mt-4 text-center text-muted">
-    <small>Smart Multi-Liquid Dispensing System | PID Control | ESP32 + Flask</small>
-    </div>   
+<div class="mt-4 text-center lab-footer">
+    <small>Automated Multi-Reagent Dispensing System &nbsp;|&nbsp; PID Control &nbsp;|&nbsp; ESP32 + Flask &nbsp;|&nbsp; Laboratory Use Only</small>
+</div>
 
+<!-- ===== Confirmation Modal ===== -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content lab-modal">
+            <div class="modal-header lab-modal-header">
+                <h5 class="modal-title">⚗ Confirm Dispense Sequence</h5>
+            </div>
+            <div class="modal-body">
+                <p class="modal-intro">Verify parameters before initiating:</p>
+                <table class="table table-sm lab-confirm-table">
+                    <tbody>
+                        <tr>
+                            <td>Pump 1 — <span id="confirmLabelA">Reagent A</span></td>
+                            <td class="text-end"><strong id="confirmVolA">—</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Pump 2 — <span id="confirmLabelB">Reagent B</span></td>
+                            <td class="text-end"><strong id="confirmVolB">—</strong></td>
+                        </tr>
+                        <tr class="table-active">
+                            <td><strong>Total Volume</strong></td>
+                            <td class="text-end"><strong id="confirmTotal">—</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Ratio A:B</td>
+                            <td class="text-end"><strong id="confirmRatio">—</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Sequence</td>
+                            <td class="text-end"><span id="confirmSequence" class="badge bg-secondary">—</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="alert alert-warning modal-warning py-2 mt-2">
+                    ⚠ Ensure all vessels are correctly positioned before proceeding.
+                </div>
+            </div>
+            <div class="modal-footer lab-modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-success lab-action-btn" id="confirmDispenseBtn">▶ Confirm & Dispense</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Rename Modal ===== -->
+<div class="modal fade" id="renameModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content lab-modal">
+            <div class="modal-header lab-modal-header">
+                <h5 class="modal-title" id="renameModalTitle">Rename Reagent</h5>
+            </div>
+            <div class="modal-body">
+                <label class="form-label preset-label">Chemical / Reagent Name</label>
+                <input type="text" class="form-control lab-input" id="renameInput" maxlength="30" placeholder="e.g. NaCl Solution">
+            </div>
+            <div class="modal-footer lab-modal-footer">
+                <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="applyRename()">Apply</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Session Expired Overlay ===== -->
+<div id="sessionExpiredOverlay" class="session-overlay" style="display:none;">
+    <div class="session-box">
+        <div class="session-icon">🔒</div>
+        <h5 class="session-title">Session Expired</h5>
+        <p class="session-msg">Your session has expired or you have been logged out.</p>
+        <a href="/login" class="btn lab-action-btn btn-primary">▶ Return to Login</a>
+    </div>
+</div>
+
+<!-- ===== User Management Modal (Admin only) ===== -->
+<div class="modal fade" id="userModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content lab-modal">
+            <div class="modal-header lab-modal-header d-flex justify-content-between align-items-center">
+                <h5 class="modal-title mb-0">⚙ User Management</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+
+                <!-- Add User Form -->
+                <div class="user-form-section mb-4">
+                    <div class="user-section-title">Add New User</div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-4">
+                            <label class="login-label">Username</label>
+                            <input type="text" class="lab-input form-control" id="newUsername" placeholder="e.g. jsmith">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="login-label">Password</label>
+                            <input type="password" class="lab-input form-control" id="newPassword" placeholder="Password">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="login-label">Role</label>
+                            <select class="lab-input form-select" id="newRole">
+                                <option value="operator">Operator</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-success w-100 lab-action-btn" onclick="addUser()" style="padding:8px;">+ Add</button>
+                        </div>
+                    </div>
+                    <div class="user-form-msg mt-2" id="userFormMsg"></div>
+                </div>
+
+                <!-- User List -->
+                <div class="user-section-title mb-2">Current Users</div>
+                <div id="userListContainer">
+                    <table class="table lab-confirm-table" id="userTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th>Created</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="userTableBody">
+                            <tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+            </div>
+            <div class="modal-footer lab-modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
