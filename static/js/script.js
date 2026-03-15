@@ -371,15 +371,28 @@ function runPumpStage(pumpNum, reagentLabel, volume, endpoint, params) {
         }
 
         fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(params)
         })
         .then(async res => {
-            if (!res.ok) { const e = await res.json(); throw new Error(e.message || 'Command rejected'); }
-            return res.json();
+            // Always safe-parse — never call res.json() blindly
+            const text = await res.text();
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (_) {
+                // Server returned HTML (e.g. Flask error page or redirect)
+                if (res.status === 401 || res.redirected) {
+                    showSessionExpired();
+                    throw new Error("Session expired. Please log in again.");
+                }
+                throw new Error("Server returned an unexpected response. Check Flask logs.");
+            }
+            if (!res.ok) throw new Error(data.message || `Server error (${res.status})`);
+            return data;
         })
-        .then(data => {
+                .then(data => {
             if (data.status !== 'started') throw new Error(data.message || 'Failed to start pump');
             showStatus(`[PUMP ${pumpNum} ACTIVE] Dispensing ${reagentLabel}: ${volume} ml`, 'warning');
 
@@ -643,13 +656,14 @@ function updateHistory(page = 0) {
 
                 const contentDiv = document.createElement('div');
                 const operatorTag = `<span class="log-operator">👤 ${event.operator || 'unknown'}</span>`;
+                const timeTag     = `<small class="text-muted">Start: ${event.timestamp}${event.end_time ? ' &nbsp;|&nbsp; End: ' + event.end_time : ''}</small>`;
 
                 if (event.type === 'DISPENSE') {
                     li.classList.add('list-group-item-success');
-                    contentDiv.innerHTML = `<strong>[DISPENSE]</strong> ${operatorTag}<br>${event.message}<br><small class="text-muted">⏱ ${event.timestamp}</small>`;
+                    contentDiv.innerHTML = `<strong>[COMPLETED]</strong> ${operatorTag}<br>${event.message}<br>${timeTag}`;
                 } else if (event.type === 'EMERGENCY') {
                     li.classList.add('list-group-item-danger');
-                    contentDiv.innerHTML = `<strong>[EMERGENCY STOP]</strong> ${operatorTag}<br>${event.message}<br><small class="text-muted">⏱ ${event.timestamp}</small>`;
+                    contentDiv.innerHTML = `<strong>[EMERGENCY STOP]</strong> ${operatorTag}<br>${event.message}<br>${timeTag}`;
                 } else {
                     contentDiv.innerHTML = event.message;
                 }

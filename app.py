@@ -9,10 +9,14 @@ import os
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "lab-secret-change-in-production")
-DB_NAME = "history.db"
+
+# Always store DB next to app.py regardless of where Flask is launched from
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME  = os.path.join(BASE_DIR, "history.db")
+print(f"Database path: {DB_NAME}")
 
 # -------------------- ESP32 configuration --------------------
-ESP32_IP = "192.168.76.3"
+ESP32_IP = "192.168.248.3"
 esp32_connected = False
 esp32_last_seen = None
 
@@ -29,30 +33,37 @@ def init_db():
         conn = get_db()
         cur = conn.cursor()
 
-        # Dispensing log table
+        # ---------- dispensing_log ----------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS dispensing_log (
-            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-            start_time            TEXT,
-            end_time              TEXT,
-            target_reagent_a_ml   REAL,
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_time             TEXT,
+            end_time               TEXT,
+            target_reagent_a_ml    REAL,
             dispensed_reagent_a_ml REAL,
-            target_reagent_b_ml   REAL,
+            target_reagent_b_ml    REAL,
             dispensed_reagent_b_ml REAL,
-            status                TEXT,
-            stop_reason           TEXT,
-            operator              TEXT DEFAULT 'unknown'
+            status                 TEXT,
+            stop_reason            TEXT,
+            operator               TEXT DEFAULT 'unknown'
         )
         """)
 
-        # Users table
+        # Auto-migrate: add 'operator' column if it doesn't exist yet
+        cur.execute("PRAGMA table_info(dispensing_log)")
+        existing_cols = [row["name"] for row in cur.fetchall()]
+        if "operator" not in existing_cols:
+            cur.execute("ALTER TABLE dispensing_log ADD COLUMN operator TEXT DEFAULT 'unknown'")
+            print("Migrated dispensing_log: added 'operator' column.")
+
+        # ---------- users ----------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            username     TEXT UNIQUE NOT NULL,
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role         TEXT NOT NULL DEFAULT 'operator',
-            created_at   TEXT
+            role          TEXT NOT NULL DEFAULT 'operator',
+            created_at    TEXT
         )
         """)
 
@@ -68,10 +79,11 @@ def init_db():
                 "admin",
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ))
-            print("✅ Default admin created — username: admin | password: admin123")
+            print("Default admin created — username: admin | password: admin123")
 
         conn.commit()
         conn.close()
+        print("Database initialised successfully.")
 
 # -------------------- Auth Decorators --------------------
 def login_required(f):
@@ -205,6 +217,28 @@ def delete_user(user_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# -------------------- Global JSON Error Handlers --------------------
+# Prevents Flask from returning HTML error pages which break frontend JSON.parse()
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({"status": "error", "message": "Bad request", "detail": str(e)}), 400
+
+@app.errorhandler(401)
+def unauthorized(e):
+    return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+@app.errorhandler(403)
+def forbidden(e):
+    return jsonify({"status": "error", "message": "Forbidden"}), 403
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"status": "error", "message": "Not found"}), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"status": "error", "message": "Internal server error", "detail": str(e)}), 500
+
 # -------------------- ESP32 Heartbeat --------------------
 @app.route("/esp32/heartbeat", methods=["POST"])
 def esp32_heartbeat():
@@ -245,41 +279,45 @@ def home():
 @app.route("/dispense", methods=["POST"])
 @login_required
 def dispense():
-    data      = request.get_json()
-    reagent_a = data.get("reagent_a", 0)
-    reagent_b = data.get("reagent_b", 0)
-    operator  = session.get("username", "unknown")
+    try:
+        data      = request.get_json(force=True) or {}
+        reagent_a = data.get("reagent_a", 0)
+        reagent_b = data.get("reagent_b", 0)
+        operator  = session.get("username", "unknown")
 
-    if not esp32_connected:
-        return jsonify({"status": "error", "message": "Controller not connected"}), 503
+        if not esp32_connected:
+            return jsonify({"status": "error", "message": "Controller not connected"}), 503
 
-    success, message = send_command_to_esp32("start", {
-        "reagent_a": reagent_a,
-        "reagent_b": reagent_b
-    })
+        success, message = send_command_to_esp32("start", {
+            "reagent_a": reagent_a,
+            "reagent_b": reagent_b
+        })
 
-    if not success:
-        return jsonify({"status": "error", "message": message}), 500
+        if not success:
+            return jsonify({"status": "error", "message": message}), 500
 
-    with db_lock:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO dispensing_log (
-                start_time,
-                target_reagent_a_ml, dispensed_reagent_a_ml,
-                target_reagent_b_ml, dispensed_reagent_b_ml,
-                status, operator
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            reagent_a, 0, reagent_b, 0,
-            "IN_PROGRESS", operator
-        ))
-        conn.commit()
-        conn.close()
+        with db_lock:
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO dispensing_log (
+                    start_time,
+                    target_reagent_a_ml, dispensed_reagent_a_ml,
+                    target_reagent_b_ml, dispensed_reagent_b_ml,
+                    status, operator
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                reagent_a, 0, reagent_b, 0,
+                "IN_PROGRESS", operator
+            ))
+            conn.commit()
+            conn.close()
 
-    return jsonify({"status": "started"})
+        return jsonify({"status": "started"})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # -------------------- Emergency Stop --------------------
 @app.route("/emergency-stop", methods=["POST"])
@@ -425,7 +463,34 @@ def delete_history(record_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# -------------------- Global JSON Error Handlers --------------------
+# Ensures Flask NEVER returns an HTML error page — always JSON.
+# This prevents "Unexpected token '<'" errors in the frontend.
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({"status": "error", "message": str(e)}), 400
+
+@app.errorhandler(401)
+def unauthorized(e):
+    return jsonify({"status": "error", "message": "Session expired"}), 401
+
+@app.errorhandler(403)
+def forbidden(e):
+    return jsonify({"status": "error", "message": "Access denied"}), 403
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"status": "error", "message": f"Internal server error: {str(e)}"}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    return jsonify({"status": "error", "message": str(e)}), 500
+
 # -------------------- Main --------------------
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True, port=5000, host="0.0.0.0", threaded=True)
+    app.run(debug=False, port=5000, host="0.0.0.0", threaded=True)
