@@ -6,6 +6,7 @@ from functools import wraps
 import requests
 import threading
 import os
+import socket
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "lab-secret-change-in-production")
@@ -16,7 +17,7 @@ DB_NAME  = os.path.join(BASE_DIR, "history.db")
 print(f"Database path: {DB_NAME}")
 
 # -------------------- ESP32 configuration --------------------
-ESP32_IP = "192.168.248.3"
+ESP32_IP = "192.168.248.200"
 esp32_connected = False
 esp32_last_seen = None
 
@@ -33,7 +34,7 @@ def init_db():
         conn = get_db()
         cur = conn.cursor()
 
-        # ---------- dispensing_log ----------
+        # Create dispensing_log
         cur.execute("""
         CREATE TABLE IF NOT EXISTS dispensing_log (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,14 +50,14 @@ def init_db():
         )
         """)
 
-        # Auto-migrate: add 'operator' column if it doesn't exist yet
+        # Migrate: add operator column if missing
         cur.execute("PRAGMA table_info(dispensing_log)")
         existing_cols = [row["name"] for row in cur.fetchall()]
         if "operator" not in existing_cols:
             cur.execute("ALTER TABLE dispensing_log ADD COLUMN operator TEXT DEFAULT 'unknown'")
             print("Migrated dispensing_log: added 'operator' column.")
 
-        # ---------- users ----------
+        # Create users table
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,8 +83,19 @@ def init_db():
             print("Default admin created — username: admin | password: admin123")
 
         conn.commit()
-        conn.close()
+        conn.close()  # ✅ Close ONLY after everything is done
         print("Database initialised successfully.")
+
+    # Cleanup stale IN_PROGRESS rows — separate lock acquisition
+    with db_lock:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM dispensing_log WHERE status = 'IN_PROGRESS'")
+        deleted = cur.rowcount
+        if deleted:
+            print(f"Cleaned up {deleted} stale IN_PROGRESS record(s).")
+        conn.commit()
+        conn.close()
 
 # -------------------- Auth Decorators --------------------
 def login_required(f):
@@ -275,14 +287,28 @@ def home():
                            username=session.get("username"),
                            role=session.get("role"))
 
+# -------------------- In-memory dispense session --------------------
+# Holds current job state between /dispense calls — DB written only on complete/stop
+# This prevents double-logging when two pumps are called sequentially
+dispense_session = {
+    "active":      False,
+    "operator":    None,
+    "start_time":  None,
+    "reagent_a":   0.0,
+    "reagent_b":   0.0,
+    "dispensed_a": 0.0,
+    "dispensed_b": 0.0,
+}
+session_lock = threading.Lock()
+
 # -------------------- Dispense --------------------
 @app.route("/dispense", methods=["POST"])
 @login_required
 def dispense():
     try:
         data      = request.get_json(force=True) or {}
-        reagent_a = data.get("reagent_a", 0)
-        reagent_b = data.get("reagent_b", 0)
+        reagent_a = float(data.get("reagent_a", 0))
+        reagent_b = float(data.get("reagent_b", 0))
         operator  = session.get("username", "unknown")
 
         if not esp32_connected:
@@ -292,27 +318,23 @@ def dispense():
             "reagent_a": reagent_a,
             "reagent_b": reagent_b
         })
-
         if not success:
             return jsonify({"status": "error", "message": message}), 500
 
-        with db_lock:
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO dispensing_log (
-                    start_time,
-                    target_reagent_a_ml, dispensed_reagent_a_ml,
-                    target_reagent_b_ml, dispensed_reagent_b_ml,
-                    status, operator
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                reagent_a, 0, reagent_b, 0,
-                "IN_PROGRESS", operator
-            ))
-            conn.commit()
-            conn.close()
+        with session_lock:
+            if not dispense_session["active"]:
+                # First pump call — open a new session
+                dispense_session["active"]      = True
+                dispense_session["operator"]    = operator
+                dispense_session["start_time"]  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                dispense_session["reagent_a"]   = reagent_a
+                dispense_session["reagent_b"]   = reagent_b
+                dispense_session["dispensed_a"] = 0.0
+                dispense_session["dispensed_b"] = 0.0
+            else:
+                # Second pump call — accumulate into same session
+                dispense_session["reagent_a"] += reagent_a
+                dispense_session["reagent_b"] += reagent_b
 
         return jsonify({"status": "started"})
 
@@ -323,28 +345,36 @@ def dispense():
 @app.route("/emergency-stop", methods=["POST"])
 @login_required
 def emergency_stop():
-    data     = request.get_json()
+    data     = request.get_json(force=True) or {}
     operator = session.get("username", "unknown")
     success, _ = send_command_to_esp32("stop")
 
-    with db_lock:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            cur.execute("""
-                UPDATE dispensing_log
-                SET end_time=?, status='EMERGENCY_STOP', stop_reason=?, operator=?
-                WHERE id=?
-            """, (
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                data.get("reason", "Emergency stop triggered"),
-                operator,
-                row["id"]
-            ))
-        conn.commit()
-        conn.close()
+    with session_lock:
+        if dispense_session["active"]:
+            with db_lock:
+                conn = get_db()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO dispensing_log (
+                        start_time, end_time,
+                        target_reagent_a_ml,   dispensed_reagent_a_ml,
+                        target_reagent_b_ml,   dispensed_reagent_b_ml,
+                        status, stop_reason, operator
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    dispense_session["start_time"],
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    dispense_session["reagent_a"],
+                    dispense_session["dispensed_a"],
+                    dispense_session["reagent_b"],
+                    dispense_session["dispensed_b"],
+                    "EMERGENCY_STOP",
+                    data.get("reason", "Emergency stop triggered"),
+                    dispense_session["operator"] or operator
+                ))
+                conn.commit()
+                conn.close()
+            dispense_session["active"] = False
 
     return jsonify({"status": "stopped", "esp32_command": "sent" if success else "failed"})
 
@@ -352,42 +382,86 @@ def emergency_stop():
 @app.route("/complete", methods=["POST"])
 @login_required
 def complete_dispense():
-    success, message = send_command_to_esp32("complete")
-    if not success:
-        return jsonify({"status": "error", "message": message}), 500
+    send_command_to_esp32("complete")  # best-effort fallback
 
-    with db_lock:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            cur.execute("""
-                UPDATE dispensing_log SET end_time=?, status='COMPLETED' WHERE id=?
-            """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), row["id"]))
-        conn.commit()
-        conn.close()
+    with session_lock:
+        if dispense_session["active"]:
+            with db_lock:
+                conn = get_db()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO dispensing_log (
+                        start_time, end_time,
+                        target_reagent_a_ml,   dispensed_reagent_a_ml,
+                        target_reagent_b_ml,   dispensed_reagent_b_ml,
+                        status, operator
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    dispense_session["start_time"],
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    dispense_session["reagent_a"],
+                    dispense_session["dispensed_a"],  # real sensor value
+                    dispense_session["reagent_b"],
+                    dispense_session["dispensed_b"],  # real sensor value
+                    "COMPLETED",
+                    dispense_session["operator"]
+                ))
+                conn.commit()
+                conn.close()
+            dispense_session["active"] = False
 
     return jsonify({"status": "completed"})
+
+# -------------------- Progress (polled by frontend) --------------------
+# Frontend calls this every 500ms to get real dispensed amounts from ESP32
+@app.route("/progress")
+@login_required
+def get_progress():
+    with session_lock:
+        if not dispense_session["active"]:
+            return jsonify({
+                "active":        False,
+                "dispensed_a":   dispense_session["dispensed_a"],
+                "dispensed_b":   dispense_session["dispensed_b"],
+                "target_a":      dispense_session["reagent_a"],
+                "target_b":      dispense_session["reagent_b"],
+                "pct_a":         100.0,
+                "pct_b":         100.0,
+            })
+
+        target_a    = dispense_session["reagent_a"]
+        target_b    = dispense_session["reagent_b"]
+        dispensed_a = dispense_session["dispensed_a"]
+        dispensed_b = dispense_session["dispensed_b"]
+
+        pct_a = round((dispensed_a / target_a * 100), 1) if target_a > 0 else 100.0
+        pct_b = round((dispensed_b / target_b * 100), 1) if target_b > 0 else 100.0
+
+        # Cap at 100%
+        pct_a = min(pct_a, 100.0)
+        pct_b = min(pct_b, 100.0)
+
+        return jsonify({
+            "active":      True,
+            "dispensed_a": round(dispensed_a, 2),
+            "dispensed_b": round(dispensed_b, 2),
+            "target_a":    target_a,
+            "target_b":    target_b,
+            "pct_a":       pct_a,
+            "pct_b":       pct_b,
+        })
 
 # -------------------- Update Progress --------------------
 @app.route("/update-progress", methods=["POST"])
 @login_required
 def update_progress():
-    data = request.get_json()
-    with db_lock:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM dispensing_log WHERE status='IN_PROGRESS' ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            cur.execute("""
-                UPDATE dispensing_log
-                SET dispensed_reagent_a_ml=?, dispensed_reagent_b_ml=?
-                WHERE id=?
-            """, (data.get("reagent_a_dispensed", 0), data.get("reagent_b_dispensed", 0), row["id"]))
-        conn.commit()
-        conn.close()
+    # Updates in-memory amounts from ESP32 flow sensor (future)
+    # No DB write here — DB is only written on complete or emergency stop
+    data = request.get_json(force=True) or {}
+    with session_lock:
+        if dispense_session["active"]:
+            dispense_session["dispensed_a"] = float(data.get("reagent_a_dispensed", 0))
+            dispense_session["dispensed_b"] = float(data.get("reagent_b_dispensed", 0))
     return jsonify({"status": "updated"})
 
 # -------------------- History --------------------
@@ -397,35 +471,39 @@ def get_history():
     with db_lock:
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM dispensing_log ORDER BY id DESC")
+        # Only show finalised records — exclude IN_PROGRESS
+        cur.execute("""
+            SELECT * FROM dispensing_log
+            WHERE status IN ('COMPLETED', 'EMERGENCY_STOP')
+            ORDER BY id DESC
+        """)
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
 
     events = []
     for r in rows:
-        if r["status"] == "IN_PROGRESS":
-            message = (f"In Progress | "
-                       f"Reagent A: {r['dispensed_reagent_a_ml']} / {r['target_reagent_a_ml']} ml, "
-                       f"Reagent B: {r['dispensed_reagent_b_ml']} / {r['target_reagent_b_ml']} ml")
-            type_ = "DISPENSE"
-        elif r["status"] == "COMPLETED":
-            message = (f"Completed | "
-                       f"Reagent A: {r['target_reagent_a_ml']} ml, "
-                       f"Reagent B: {r['target_reagent_b_ml']} ml")
+        if r["status"] == "COMPLETED":
+            message = (
+                f"Reagent A: {r['dispensed_reagent_a_ml']} ml, "
+                f"Reagent B: {r['dispensed_reagent_b_ml']} ml | "
+                f"Total: {(r['dispensed_reagent_a_ml'] or 0) + (r['dispensed_reagent_b_ml'] or 0):.1f} ml"
+            )
             type_ = "DISPENSE"
         elif r["status"] == "EMERGENCY_STOP":
-            message = (f"Emergency Stop | "
-                       f"Reagent A: {r['dispensed_reagent_a_ml']} / {r['target_reagent_a_ml']} ml, "
-                       f"Reagent B: {r['dispensed_reagent_b_ml']} / {r['target_reagent_b_ml']} ml | "
-                       f"Reason: {r['stop_reason']}")
+            message = (
+                f"Stopped at — "
+                f"Reagent A: {r['dispensed_reagent_a_ml']} / {r['target_reagent_a_ml']} ml, "
+                f"Reagent B: {r['dispensed_reagent_b_ml']} / {r['target_reagent_b_ml']} ml | "
+                f"Reason: {r['stop_reason']}"
+            )
             type_ = "EMERGENCY"
         else:
-            message = "Unknown status"
-            type_ = "INFO"
+            continue
 
         events.append({
             "id":        r["id"],
             "timestamp": r["start_time"],
+            "end_time":  r.get("end_time", ""),
             "operator":  r.get("operator", "unknown"),
             "type":      type_,
             "message":   message
@@ -493,4 +571,4 @@ def handle_exception(e):
 # -------------------- Main --------------------
 if __name__ == "__main__":
     init_db()
-    app.run(debug=False, port=5000, host="0.0.0.0", threaded=True)
+    app.run(debug=True, port=5000, host="0.0.0.0", threaded=True)

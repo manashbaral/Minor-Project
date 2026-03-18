@@ -396,19 +396,52 @@ function runPumpStage(pumpNum, reagentLabel, volume, endpoint, params) {
             if (data.status !== 'started') throw new Error(data.message || 'Failed to start pump');
             showStatus(`[PUMP ${pumpNum} ACTIVE] Dispensing ${reagentLabel}: ${volume} ml`, 'warning');
 
-            let progress = 0;
-            progressInterval = setInterval(() => {
-                if (!dispensing) { clearInterval(progressInterval); return; }
-                progress += 2;
-                setProgressPct(Math.min(progress, 100));
-                updateChart(progress);
-                if (progress >= 100) {
+            // ---- Real progress polling from Flask /progress ----
+            // Polls every 500ms — Flask serves data from ESP32 flow sensor
+            progressInterval = setInterval(async () => {
+                if (!dispensing) {
                     clearInterval(progressInterval);
-                    setPumpState(pumpNum, 'done');
-                    setTimelineState(pumpNum, 'done');
-                    resolve();
+                    return;
                 }
-            }, 200);
+
+                try {
+                    const res  = await fetch('/progress');
+                    const prog = await res.json();
+
+                    // Pick the relevant pump's dispensed/target values
+                    const dispensed = pumpNum === 1 ? prog.dispensed_a : prog.dispensed_b;
+                    const target    = pumpNum === 1 ? prog.target_a    : prog.target_b;
+                    const pct       = pumpNum === 1 ? prog.pct_a       : prog.pct_b;
+
+                    // Update progress bar and chart with real sensor data
+                    setProgressPct(Math.min(pct, 100));
+                    updateChart(pct);
+
+                    // Update live status with actual ml dispensed
+                    showStatus(
+                        `[PUMP ${pumpNum} ACTIVE] ${reagentLabel}: ${dispensed.toFixed(1)} / ${target.toFixed(1)} ml (${pct.toFixed(1)}%)`,
+                        'warning'
+                    );
+
+                    // Pump finished — ESP32 auto-stopped and notified Flask
+                    if (!prog.active || pct >= 100) {
+                        clearInterval(progressInterval);
+                        setProgressPct(100);
+                        setPumpState(pumpNum, 'done');
+                        setTimelineState(pumpNum, 'done');
+                        showStatus(
+                            `[PUMP ${pumpNum} DONE] ${reagentLabel}: ${dispensed.toFixed(1)} ml dispensed`,
+                            'success'
+                        );
+                        resolve();
+                    }
+
+                } catch (e) {
+                    // Don't stop dispensing on a single failed poll — just skip this tick
+                    console.warn('Progress poll failed:', e.message);
+                }
+
+            }, 500);
         })
         .catch(err => {
             setPumpState(pumpNum, 'stopped');
