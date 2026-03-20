@@ -1,370 +1,366 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Automated Multi-Reagent Dispensing System</title>
+    <title>AMRDS — Automated Multi-Reagent Dispensing System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static',filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
 </head>
 <body>
-<div class="container py-4">
 
-    <!-- Header -->
-    <div class="mb-4 lab-header">
-        <!-- Top bar: operator info + controls -->
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <div class="operator-info">
-                <span class="operator-icon">👤</span>
-                <span class="operator-name" id="operatorName">{{ username }}</span>
-                <span class="role-badge role-{{ role }}" id="roleBadge">{{ role | upper }}</span>
+<!-- ===== TOP NAV ===== -->
+<nav class="dash-nav">
+    <div class="dash-nav-left">
+        <div class="dash-logo">
+            <span class="dash-logo-icon">⚗</span>
+            <div>
+                <div class="dash-logo-title">AMRDS</div>
+                <div class="dash-logo-sub">Multi-Reagent Dispensing</div>
             </div>
-            <div class="d-flex gap-2 align-items-center">
-                {% if role == 'admin' %}
-                <button class="btn btn-sm lab-mgmt-btn" onclick="openUserModal()">⚙ Manage Users</button>
-                {% endif %}
-                <button class="btn btn-sm dark-toggle-btn" onclick="toggleDarkMode()">
-                    <span id="darkModeIcon">🌙 Dark Mode</span>
-                </button>
-                <button class="btn btn-sm btn-outline-danger logout-btn" onclick="doLogout()">⏏ Logout</button>
+        </div>
+    </div>
+    <div class="dash-nav-center">
+        <div class="dash-status-pill" id="deviceStatusPill">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="connectionStatus">Connecting...</span>
+        </div>
+    </div>
+    <div class="dash-nav-right">
+        <button class="nav-icon-btn" onclick="toggleDarkMode()" title="Toggle theme">
+            <span id="darkModeIcon">☀</span>
+        </button>
+        <button class="nav-icon-btn" onclick="openLogDrawer()" title="View dispense log">
+            📋
+        </button>
+        {% if role == 'admin' %}
+        <button class="nav-icon-btn" onclick="openUserModal()" title="Manage users">
+            ⚙
+        </button>
+        {% endif %}
+        <div class="nav-user-chip">
+            <span class="nav-user-avatar">{{ username[0] | upper }}</span>
+            <span class="nav-user-name">{{ username }}</span>
+            <span class="nav-role-pill role-{{ role }}">{{ role }}</span>
+        </div>
+        <button class="nav-logout-btn" onclick="doLogout()">Sign out</button>
+    </div>
+</nav>
+
+<!-- ===== MAIN DASHBOARD ===== -->
+<main class="dash-main">
+
+    <!-- ── Row 1: Reagent Cards ── -->
+    <div class="dash-grid-2 mb-4">
+
+        <!-- Reagent A Card -->
+        <div class="dash-card reagent-card-a">
+            <div class="dash-card-header">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="reagent-badge badge-a">A</span>
+                    <span class="dash-card-title" id="labelReagentA">Reagent A</span>
+                </div>
+                <button class="icon-btn-sm" onclick="openRenameModal('A')" title="Rename">✏</button>
+            </div>
+            <div class="dash-card-body">
+                <div class="volume-display" id="waterValue">100</div>
+                <div class="volume-unit">ml</div>
+                <input type="range" class="dash-slider slider-a" id="waterSlider" min="0" max="500" value="100">
+                <div class="slider-labels">
+                    <span>0 ml</span>
+                    <span>500 ml</span>
+                </div>
+                <div class="pump-state-badge" id="pump1Indicator">
+                    <span class="pump-dot" id="pump1Dot"></span>
+                    <span id="pump1StatusText">IDLE</span>
+                </div>
             </div>
         </div>
 
-        <!-- Title block -->
-        <div class="text-center">
-            <div class="lab-badge mb-2">LABORATORY INSTRUMENT</div>
-            <h1 class="system-title">Automated Multi-Reagent<br>Dispensing System</h1>
-            <p class="system-subtitle">PID-Controlled Precision Dispensing</p>
-            <div class="status-bar mt-3">
-                <span class="status-label">DEVICE STATUS</span>
-                <span id="connectionStatus" class="status-value">⬤ Connecting to Controller...</span>
+        <!-- Reagent B Card -->
+        <div class="dash-card reagent-card-b">
+            <div class="dash-card-header">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="reagent-badge badge-b">B</span>
+                    <span class="dash-card-title" id="labelReagentB">Reagent B</span>
+                </div>
+                <button class="icon-btn-sm" onclick="openRenameModal('B')" title="Rename">✏</button>
+            </div>
+            <div class="dash-card-body">
+                <div class="volume-display" id="syrupValue">50</div>
+                <div class="volume-unit">ml</div>
+                <input type="range" class="dash-slider slider-b" id="syrupSlider" min="0" max="500" value="50">
+                <div class="slider-labels">
+                    <span>0 ml</span>
+                    <span>500 ml</span>
+                </div>
+                <div class="pump-state-badge" id="pump2Indicator">
+                    <span class="pump-dot" id="pump2Dot"></span>
+                    <span id="pump2StatusText">IDLE</span>
+                </div>
             </div>
         </div>
     </div>
 
-    <div class="row">
-        <!-- Left: Control Panel -->
-        <div class="col-md-6">
-            <div class="card lab-card shadow">
-                <div class="card-header lab-card-header">
-                    <h4 class="mb-0">⚙ Control Panel</h4>
+    <!-- ── Row 2: Summary + Sequence ── -->
+    <div class="dash-grid-2 mb-4">
+
+        <!-- Volume Summary -->
+        <div class="dash-card">
+            <div class="dash-card-header">
+                <span class="dash-card-title">Volume Summary</span>
+            </div>
+            <div class="dash-card-body">
+                <div class="summary-metrics">
+                    <div class="metric-item">
+                        <div class="metric-label"><span class="summary-dot dot-a"></span><span id="summaryLabelA">Reagent A</span></div>
+                        <div class="metric-value text-a" id="summaryVolA">100 ml</div>
+                    </div>
+                    <div class="metric-divider">+</div>
+                    <div class="metric-item">
+                        <div class="metric-label"><span class="summary-dot dot-b"></span><span id="summaryLabelB">Reagent B</span></div>
+                        <div class="metric-value text-b" id="summaryVolB">50 ml</div>
+                    </div>
+                    <div class="metric-divider">=</div>
+                    <div class="metric-item">
+                        <div class="metric-label">Total</div>
+                        <div class="metric-value" id="summaryTotal">150 ml</div>
+                    </div>
                 </div>
-                <div class="card-body">
-
-                    <!-- Reagent A Control -->
-                    <div class="reagent-card reagent-a">
-                        <div class="reagent-label">
-                            <span class="reagent-icon">🧪</span>
-                            <span class="reagent-name" id="labelReagentA">Reagent A</span>
-                            <span class="reagent-unit">(ml)</span>
-                            <button class="btn btn-xs rename-btn ms-2" onclick="openRenameModal('A')" title="Rename">✏</button>
-                        </div>
-                        <div class="slider-container mt-2">
-                            <input type="range" class="form-range lab-range" id="waterSlider" min="0" max="500" value="100">
-                            <span class="slider-tooltip" id="waterTooltip">100</span>
-                        </div>
-                        <div class="d-flex justify-content-between range-labels">
-                            <span>0 ml</span>
-                            <strong><span id="waterValue">100</span> ml</strong>
-                            <span>500 ml</span>
-                        </div>
+                <div class="ratio-bar-wrap mt-3">
+                    <div class="ratio-bar" id="ratioBar">
+                        <div class="ratio-seg seg-a" id="ratioSegA" style="width:67%"></div>
+                        <div class="ratio-seg seg-b" id="ratioSegB" style="width:33%"></div>
                     </div>
+                    <div class="ratio-label">Ratio A:B = <strong id="summaryRatio">2:1</strong></div>
+                </div>
 
-                    <!-- Reagent B Control -->
-                    <div class="reagent-card reagent-b">
-                        <div class="reagent-label">
-                            <span class="reagent-icon">🧫</span>
-                            <span class="reagent-name" id="labelReagentB">Reagent B</span>
-                            <span class="reagent-unit">(ml)</span>
-                            <button class="btn btn-xs rename-btn ms-2" onclick="openRenameModal('B')" title="Rename">✏</button>
-                        </div>
-                        <div class="slider-container mt-2">
-                            <input type="range" class="form-range lab-range" id="syrupSlider" min="0" max="500" value="50">
-                            <span class="slider-tooltip" id="syrupTooltip">50</span>
-                        </div>
-                        <div class="d-flex justify-content-between range-labels">
-                            <span>0 ml</span>
-                            <strong><span id="syrupValue">50</span> ml</strong>
-                            <span>500 ml</span>
-                        </div>
+                <!-- Presets -->
+                <div class="mt-3">
+                    <div class="preset-label mb-2">Quick Protocols</div>
+                    <div class="preset-grid">
+                        <button class="preset-btn" onclick="setPreset(200, 50)">Buffer Solution</button>
+                        <button class="preset-btn" onclick="setPreset(150, 100)">Sample Dilution</button>
+                        <button class="preset-btn" onclick="setPreset(300, 0)">Reagent A Only</button>
                     </div>
-
-                    <!-- Volume & Ratio Summary -->
-                    <div class="summary-box mt-3" id="summaryBox">
-                        <div class="summary-row">
-                            <span class="summary-item">
-                                <span class="summary-dot dot-a"></span>
-                                <span id="summaryLabelA">Reagent A</span>:
-                                <strong id="summaryVolA">100 ml</strong>
-                            </span>
-                            <span class="summary-sep">+</span>
-                            <span class="summary-item">
-                                <span class="summary-dot dot-b"></span>
-                                <span id="summaryLabelB">Reagent B</span>:
-                                <strong id="summaryVolB">50 ml</strong>
-                            </span>
-                            <span class="summary-sep">=</span>
-                            <span class="summary-total">Total: <strong id="summaryTotal">150 ml</strong></span>
-                        </div>
-                        <div class="summary-ratio mt-1">
-                            Ratio A:B = <strong id="summaryRatio">2:1</strong>
-                        </div>
-                    </div>
-
-                    <!-- Protocol Presets -->
-                    <div class="mt-3">
-                        <label class="form-label preset-label">Standard Protocols:</label>
-                        <div class="btn-group w-100 flex-wrap" role="group">
-                            <button class="btn btn-outline-secondary lab-preset-btn" onclick="setPreset(200, 50)">Buffer Solution</button>
-                            <button class="btn btn-outline-secondary lab-preset-btn" onclick="setPreset(150, 100)">Sample Dilution</button>
-                            <button class="btn btn-outline-secondary lab-preset-btn" onclick="setPreset(300, 0)">Reagent A Only</button>
-                        </div>
-                    </div>
-
-                    <!-- Action Buttons -->
-                    <div class="mt-4 text-center d-flex justify-content-center gap-3">
-                        <button class="btn btn-success lab-action-btn" onclick="startDispensing()">
-                            <span id="dispenseBtnText">▶ Initiate Dispense</span>
-                        </button>
-                        <button class="btn btn-danger lab-action-btn" onclick="emergencyStop()">
-                            ■ Emergency Stop
-                        </button>
-                    </div>
-
                 </div>
             </div>
         </div>
 
-        <!-- Right: Monitoring -->
-        <div class="col-md-6">
-            <div class="card lab-card shadow mb-4">
-                <div class="card-header lab-card-header-info">
-                    <h4 class="mb-0">📊 Live Monitoring</h4>
-                </div>
-                <div class="card-body">
-                    <div class="lab-status-box" id="statusBox">
-                        System ready. Configure volumes and initiate dispense sequence.
-                    </div>
-
-                    <!-- Pump Status Indicators -->
-                    <div class="pump-status-row mt-3">
-                        <div class="pump-indicator" id="pump1Indicator">
-                            <span class="pump-dot" id="pump1Dot"></span>
-                            <span class="pump-label">PUMP 1</span>
-                            <span class="pump-reagent" id="pump1ReagentLabel">Reagent A</span>
-                            <span class="pump-state" id="pump1State">IDLE</span>
-                        </div>
-                        <div class="pump-divider">→</div>
-                        <div class="pump-indicator" id="pump2Indicator">
-                            <span class="pump-dot" id="pump2Dot"></span>
-                            <span class="pump-label">PUMP 2</span>
-                            <span class="pump-reagent" id="pump2ReagentLabel">Reagent B</span>
-                            <span class="pump-state" id="pump2State">IDLE</span>
-                        </div>
-                    </div>
-
-                    <!-- Pump Sequence Timeline -->
-                    <div class="sequence-timeline mt-3">
-                        <div class="seq-step">
-                            <div class="seq-block seq-a" id="seqBlock1">
-                                <span id="seqLabel1">PUMP 1</span>
-                            </div>
-                            <div class="seq-sub" id="seqVol1">—</div>
-                        </div>
-                        <div class="seq-arrow">→</div>
-                        <div class="seq-pause" id="seqPause">2s</div>
-                        <div class="seq-arrow">→</div>
-                        <div class="seq-step">
-                            <div class="seq-block seq-b" id="seqBlock2">
-                                <span id="seqLabel2">PUMP 2</span>
-                            </div>
-                            <div class="seq-sub" id="seqVol2">—</div>
-                        </div>
-                    </div>
-
-                    <!-- Progress Bar -->
-                    <div id="progressContainer" style="display: none;" class="mt-3">
-                        <div class="progress-label-row">
-                            <span class="progress-stage-label" id="progressStageLabel"></span>
-                            <span class="progress-pct" id="progressPct">0%</span>
-                        </div>
-                        <div class="progress lab-progress mt-1">
-                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
-                                 style="width: 0%"></div>
-                        </div>
-                    </div>
-
-                    <div class="mt-3">
-                        <canvas id="flowChart"></canvas>
-                    </div>
-                </div>
+        <!-- Sequence Timeline -->
+        <div class="dash-card">
+            <div class="dash-card-header">
+                <span class="dash-card-title">Dispense Sequence</span>
             </div>
-
-            <!-- Dispense Log -->
-            <div class="card lab-card shadow">
-                <div class="card-header lab-card-header-sec d-flex justify-content-between align-items-center">
-                    <h4 class="mb-0">🗒 Dispense Log</h4>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-sm btn-outline-info" onclick="exportCSV()">⬇ CSV</button>
-                        <button class="btn btn-sm btn-outline-danger admin-only" onclick="clearHistory()">Clear Log</button>
+            <div class="dash-card-body">
+                <div class="sequence-timeline" id="sequenceTimeline">
+                    <div class="seq-block" id="seqBlock1">
+                        <div class="seq-icon">①</div>
+                        <div class="seq-info">
+                            <div class="seq-name" id="seqLabel1">Pump 1 — Reagent A</div>
+                            <div class="seq-vol" id="seqVol1">100 ml</div>
+                        </div>
+                        <div class="seq-state" id="seqState1">IDLE</div>
+                    </div>
+                    <div class="seq-connector" id="seqPause">
+                        <div class="seq-line"></div>
+                        <div class="seq-pause-label">2s pause</div>
+                        <div class="seq-line"></div>
+                    </div>
+                    <div class="seq-block" id="seqBlock2">
+                        <div class="seq-icon">②</div>
+                        <div class="seq-info">
+                            <div class="seq-name" id="seqLabel2">Pump 2 — Reagent B</div>
+                            <div class="seq-vol" id="seqVol2">50 ml</div>
+                        </div>
+                        <div class="seq-state" id="seqState2">IDLE</div>
                     </div>
                 </div>
-                <div class="card-body d-flex flex-column">
-                    <ul class="list-group mb-2" id="historyList">
-                        <li class="list-group-item lab-log-empty">No dispense records found</li>
-                    </ul>
-                    <div id="historyPagination">
-                        <button id="prevHistory" class="btn btn-secondary btn-sm" onclick="prevHistory()">◀ Previous</button>
-                        <button id="nextHistory" class="btn btn-secondary btn-sm" onclick="nextHistory()">Next ▶</button>
+
+                <!-- Progress -->
+                <div class="mt-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="prog-label" id="progressLabel">Ready</span>
+                        <span class="prog-pct" id="progressPct">0%</span>
+                    </div>
+                    <div class="dash-progress">
+                        <div class="dash-progress-bar" id="progressBar" style="width:0%"></div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- ── Row 3: Live Monitor + Chart ── -->
+    <div class="dash-grid-2 mb-4">
+
+        <!-- Live Monitor -->
+        <div class="dash-card">
+            <div class="dash-card-header">
+                <span class="dash-card-title">Live Monitor</span>
+                <span class="live-dot-wrap"><span class="live-dot"></span> LIVE</span>
+            </div>
+            <div class="dash-card-body">
+                <div class="live-monitor" id="statusBox">
+                    System ready. Configure volumes and initiate dispense.
+                </div>
+            </div>
+        </div>
+
+        <!-- Flow Chart -->
+        <div class="dash-card">
+            <div class="dash-card-header">
+                <span class="dash-card-title">Flow Rate</span>
+                <span class="chart-legend" id="chartLegend">Pump 1 — ml/s</span>
+            </div>
+            <div class="dash-card-body">
+                <canvas id="flowChart" height="160"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Row 4: Action Buttons ── -->
+    <div class="dash-action-row mb-4">
+        <button class="btn-dispense" onclick="startDispensing()">
+            <span id="dispenseBtnText">▶ Initiate Dispense</span>
+        </button>
+        <button class="btn-stop" onclick="emergencyStop()">
+            ■ Emergency Stop
+        </button>
+    </div>
+
+</main>
+
+<!-- ===== LOG DRAWER ===== -->
+<div class="drawer-overlay" id="drawerOverlay" onclick="closeLogDrawer()"></div>
+<div class="log-drawer" id="logDrawer">
+    <div class="drawer-header">
+        <div>
+            <div class="drawer-title">📋 Dispense Log</div>
+            <div class="drawer-sub" id="drawerSub">All records</div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <button class="drawer-btn" onclick="exportCSV()">⬇ CSV</button>
+            <button class="drawer-btn danger admin-only" onclick="clearHistory()">Clear</button>
+            <button class="drawer-close" onclick="closeLogDrawer()">✕</button>
+        </div>
+    </div>
+    <div class="drawer-body">
+        <ul class="log-list" id="historyList">
+            <li class="log-empty">Loading...</li>
+        </ul>
+        <div class="drawer-pagination">
+            <button class="drawer-page-btn" id="prevHistory" onclick="prevHistory()">◀ Prev</button>
+            <span class="drawer-page-info" id="pageInfo">Page 1</span>
+            <button class="drawer-page-btn" id="nextHistory" onclick="nextHistory()">Next ▶</button>
+        </div>
+    </div>
 </div>
 
-<!-- Footer -->
-<div class="mt-4 text-center lab-footer">
-    <small>Automated Multi-Reagent Dispensing System &nbsp;|&nbsp; PID Control &nbsp;|&nbsp; ESP32 + Flask &nbsp;|&nbsp; Laboratory Use Only</small>
-</div>
+<!-- ===== MODALS ===== -->
 
-<!-- ===== Confirmation Modal ===== -->
+<!-- Confirmation Modal -->
 <div class="modal fade" id="confirmModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content lab-modal">
-            <div class="modal-header lab-modal-header">
-                <h5 class="modal-title">⚗ Confirm Dispense Sequence</h5>
+        <div class="modal-content dash-modal">
+            <div class="modal-header dash-modal-header">
+                <h5 class="modal-title">⚗ Confirm Dispense</h5>
             </div>
             <div class="modal-body">
-                <p class="modal-intro">Verify parameters before initiating:</p>
-                <table class="table table-sm lab-confirm-table">
+                <table class="table table-sm dash-table">
                     <tbody>
-                        <tr>
-                            <td>Pump 1 — <span id="confirmLabelA">Reagent A</span></td>
-                            <td class="text-end"><strong id="confirmVolA">—</strong></td>
-                        </tr>
-                        <tr>
-                            <td>Pump 2 — <span id="confirmLabelB">Reagent B</span></td>
-                            <td class="text-end"><strong id="confirmVolB">—</strong></td>
-                        </tr>
-                        <tr class="table-active">
-                            <td><strong>Total Volume</strong></td>
-                            <td class="text-end"><strong id="confirmTotal">—</strong></td>
-                        </tr>
-                        <tr>
-                            <td>Ratio A:B</td>
-                            <td class="text-end"><strong id="confirmRatio">—</strong></td>
-                        </tr>
-                        <tr>
-                            <td>Sequence</td>
-                            <td class="text-end"><span id="confirmSequence" class="badge bg-secondary">—</span></td>
-                        </tr>
+                        <tr><td>Pump 1 — <span id="confirmLabelA">Reagent A</span></td><td class="text-end"><strong id="confirmVolA">—</strong></td></tr>
+                        <tr><td>Pump 2 — <span id="confirmLabelB">Reagent B</span></td><td class="text-end"><strong id="confirmVolB">—</strong></td></tr>
+                        <tr class="total-row"><td><strong>Total Volume</strong></td><td class="text-end"><strong id="confirmTotal">—</strong></td></tr>
+                        <tr><td>Ratio A:B</td><td class="text-end"><strong id="confirmRatio">—</strong></td></tr>
+                        <tr><td>Sequence</td><td class="text-end"><span id="confirmSequence" class="badge bg-secondary">—</span></td></tr>
                     </tbody>
                 </table>
-                <div class="alert alert-warning modal-warning py-2 mt-2">
-                    ⚠ Ensure all vessels are correctly positioned before proceeding.
-                </div>
+                <div class="dash-warning mt-2">⚠ Ensure all vessels are correctly positioned before proceeding.</div>
             </div>
-            <div class="modal-footer lab-modal-footer">
-                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button class="btn btn-success lab-action-btn" id="confirmDispenseBtn">▶ Confirm & Dispense</button>
+            <div class="modal-footer dash-modal-footer">
+                <button class="btn-modal-cancel" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn-modal-confirm" id="confirmDispenseBtn">▶ Confirm & Dispense</button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- ===== Rename Modal ===== -->
+<!-- Rename Modal -->
 <div class="modal fade" id="renameModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-sm">
-        <div class="modal-content lab-modal">
-            <div class="modal-header lab-modal-header">
+        <div class="modal-content dash-modal">
+            <div class="modal-header dash-modal-header">
                 <h5 class="modal-title" id="renameModalTitle">Rename Reagent</h5>
             </div>
             <div class="modal-body">
-                <label class="form-label preset-label">Chemical / Reagent Name</label>
-                <input type="text" class="form-control lab-input" id="renameInput" maxlength="30" placeholder="e.g. NaCl Solution">
+                <label class="dash-label">Chemical / Reagent Name</label>
+                <input type="text" class="dash-input" id="renameInput" maxlength="30" placeholder="e.g. NaCl Solution">
             </div>
-            <div class="modal-footer lab-modal-footer">
-                <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-                <button class="btn btn-primary btn-sm" onclick="applyRename()">Apply</button>
+            <div class="modal-footer dash-modal-footer">
+                <button class="btn-modal-cancel" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn-modal-confirm" onclick="applyRename()">Apply</button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- ===== Session Expired Overlay ===== -->
-<div id="sessionExpiredOverlay" class="session-overlay" style="display:none;">
-    <div class="session-box">
-        <div class="session-icon">🔒</div>
-        <h5 class="session-title">Session Expired</h5>
-        <p class="session-msg">Your session has expired or you have been logged out.</p>
-        <a href="/login" class="btn lab-action-btn btn-primary">▶ Return to Login</a>
-    </div>
-</div>
-
-<!-- ===== User Management Modal (Admin only) ===== -->
+<!-- User Management Modal -->
 <div class="modal fade" id="userModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-lg">
-        <div class="modal-content lab-modal">
-            <div class="modal-header lab-modal-header d-flex justify-content-between align-items-center">
-                <h5 class="modal-title mb-0">⚙ User Management</h5>
+        <div class="modal-content dash-modal">
+            <div class="modal-header dash-modal-header">
+                <h5 class="modal-title">⚙ User Management</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-
-                <!-- Add User Form -->
                 <div class="user-form-section mb-4">
-                    <div class="user-section-title">Add New User</div>
+                    <div class="section-label mb-3">Add New User</div>
                     <div class="row g-2 align-items-end">
                         <div class="col-md-4">
-                            <label class="login-label">Username</label>
-                            <input type="text" class="lab-input form-control" id="newUsername" placeholder="e.g. jsmith">
+                            <label class="dash-label">Username</label>
+                            <input type="text" class="dash-input" id="newUsername" placeholder="e.g. jsmith">
                         </div>
                         <div class="col-md-4">
-                            <label class="login-label">Password</label>
-                            <input type="password" class="lab-input form-control" id="newPassword" placeholder="Password">
+                            <label class="dash-label">Password</label>
+                            <input type="password" class="dash-input" id="newPassword" placeholder="Password">
                         </div>
                         <div class="col-md-2">
-                            <label class="login-label">Role</label>
-                            <select class="lab-input form-select" id="newRole">
+                            <label class="dash-label">Role</label>
+                            <select class="dash-input dash-select" id="newRole">
                                 <option value="operator">Operator</option>
                                 <option value="admin">Admin</option>
                             </select>
                         </div>
                         <div class="col-md-2">
-                            <button class="btn btn-success w-100 lab-action-btn" onclick="addUser()" style="padding:8px;">+ Add</button>
+                            <button class="btn-modal-confirm w-100" onclick="addUser()">+ Add</button>
                         </div>
                     </div>
                     <div class="user-form-msg mt-2" id="userFormMsg"></div>
                 </div>
-
-                <!-- User List -->
-                <div class="user-section-title mb-2">Current Users</div>
-                <div id="userListContainer">
-                    <table class="table lab-confirm-table" id="userTable">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Username</th>
-                                <th>Role</th>
-                                <th>Created</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="userTableBody">
-                            <tr><td colspan="5" class="text-center text-muted">Loading...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-
+                <div class="section-label mb-2">Current Users</div>
+                <table class="table dash-table" id="userTable">
+                    <thead><tr><th>#</th><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+                    <tbody id="userTableBody"><tr><td colspan="5" class="text-center">Loading...</td></tr></tbody>
+                </table>
             </div>
-            <div class="modal-footer lab-modal-footer">
-                <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <div class="modal-footer dash-modal-footer">
+                <button class="btn-modal-cancel" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Session Expired Overlay -->
+<div id="sessionExpiredOverlay" class="session-overlay" style="display:none;">
+    <div class="session-box">
+        <div class="session-icon">🔒</div>
+        <h5 class="session-title">Session Expired</h5>
+        <p class="session-msg">Your session has expired. Please sign in again.</p>
+        <a href="/login" class="btn-modal-confirm">▶ Return to Login</a>
     </div>
 </div>
 

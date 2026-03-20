@@ -17,7 +17,7 @@ DB_NAME  = os.path.join(BASE_DIR, "history.db")
 print(f"Database path: {DB_NAME}")
 
 # -------------------- ESP32 configuration --------------------
-ESP32_IP = "192.168.248.200"
+ESP32_IP = "192.168.76.3"
 esp32_connected = False
 esp32_last_seen = None
 
@@ -32,9 +32,9 @@ def get_db():
 def init_db():
     with db_lock:
         conn = get_db()
-        cur = conn.cursor()
+        cur  = conn.cursor()
 
-        # Create dispensing_log
+        # ---------- dispensing_log ----------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS dispensing_log (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,14 +50,14 @@ def init_db():
         )
         """)
 
-        # Migrate: add operator column if missing
+        # Auto-migrate: add 'operator' column if missing
         cur.execute("PRAGMA table_info(dispensing_log)")
         existing_cols = [row["name"] for row in cur.fetchall()]
         if "operator" not in existing_cols:
             cur.execute("ALTER TABLE dispensing_log ADD COLUMN operator TEXT DEFAULT 'unknown'")
             print("Migrated dispensing_log: added 'operator' column.")
 
-        # Create users table
+        # ---------- users ----------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,20 +82,15 @@ def init_db():
             ))
             print("Default admin created — username: admin | password: admin123")
 
-        conn.commit()
-        conn.close()  # ✅ Close ONLY after everything is done
-        print("Database initialised successfully.")
-
-    # Cleanup stale IN_PROGRESS rows — separate lock acquisition
-    with db_lock:
-        conn = get_db()
-        cur = conn.cursor()
+        # Clean up stale IN_PROGRESS rows from previous crashes
         cur.execute("DELETE FROM dispensing_log WHERE status = 'IN_PROGRESS'")
-        deleted = cur.rowcount
-        if deleted:
-            print(f"Cleaned up {deleted} stale IN_PROGRESS record(s).")
+        if cur.rowcount:
+            print(f"Cleaned up {cur.rowcount} stale IN_PROGRESS record(s).")
+
+        # Single commit and close — everything done in one connection
         conn.commit()
         conn.close()
+        print("Database initialised successfully.")
 
 # -------------------- Auth Decorators --------------------
 def login_required(f):
@@ -129,9 +124,10 @@ def login():
         return redirect(url_for("home"))
 
     if request.method == "POST":
-        data = request.get_json()
-        username = data.get("username", "").strip()
-        password = data.get("password", "")
+        data          = request.get_json()
+        username      = data.get("username", "").strip()
+        password      = data.get("password", "")
+        selected_role = data.get("selected_role", None)
 
         with db_lock:
             conn = get_db()
@@ -141,6 +137,13 @@ def login():
             conn.close()
 
         if user and check_password_hash(user["password_hash"], password):
+            # Validate selected role matches actual role
+            if selected_role and selected_role != user["role"]:
+                return jsonify({
+                    "status":  "error",
+                    "message": f"Access denied. '{username}' is not an {selected_role}."
+                }), 401
+
             session["user_id"]  = user["id"]
             session["username"] = user["username"]
             session["role"]     = user["role"]
@@ -228,28 +231,6 @@ def delete_user(user_id):
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-# -------------------- Global JSON Error Handlers --------------------
-# Prevents Flask from returning HTML error pages which break frontend JSON.parse()
-@app.errorhandler(400)
-def bad_request(e):
-    return jsonify({"status": "error", "message": "Bad request", "detail": str(e)}), 400
-
-@app.errorhandler(401)
-def unauthorized(e):
-    return jsonify({"status": "error", "message": "Unauthorized"}), 401
-
-@app.errorhandler(403)
-def forbidden(e):
-    return jsonify({"status": "error", "message": "Forbidden"}), 403
-
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({"status": "error", "message": "Not found"}), 404
-
-@app.errorhandler(500)
-def internal_error(e):
-    return jsonify({"status": "error", "message": "Internal server error", "detail": str(e)}), 500
 
 # -------------------- ESP32 Heartbeat --------------------
 @app.route("/esp32/heartbeat", methods=["POST"])
@@ -349,32 +330,45 @@ def emergency_stop():
     operator = session.get("username", "unknown")
     success, _ = send_command_to_esp32("stop")
 
+    # Step 1 — snapshot session state and mark inactive under session_lock only
+    snapshot = None
     with session_lock:
         if dispense_session["active"]:
-            with db_lock:
-                conn = get_db()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO dispensing_log (
-                        start_time, end_time,
-                        target_reagent_a_ml,   dispensed_reagent_a_ml,
-                        target_reagent_b_ml,   dispensed_reagent_b_ml,
-                        status, stop_reason, operator
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    dispense_session["start_time"],
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    dispense_session["reagent_a"],
-                    dispense_session["dispensed_a"],
-                    dispense_session["reagent_b"],
-                    dispense_session["dispensed_b"],
-                    "EMERGENCY_STOP",
-                    data.get("reason", "Emergency stop triggered"),
-                    dispense_session["operator"] or operator
-                ))
-                conn.commit()
-                conn.close()
-            dispense_session["active"] = False
+            snapshot = {
+                "start_time":  dispense_session["start_time"],
+                "reagent_a":   dispense_session["reagent_a"],
+                "dispensed_a": dispense_session["dispensed_a"],
+                "reagent_b":   dispense_session["reagent_b"],
+                "dispensed_b": dispense_session["dispensed_b"],
+                "operator":    dispense_session["operator"] or operator,
+            }
+            dispense_session["active"] = False  # mark inactive immediately
+
+    # Step 2 — write to DB under db_lock only (session_lock already released)
+    if snapshot:
+        with db_lock:
+            conn = get_db()
+            cur  = conn.cursor()
+            cur.execute("""
+                INSERT INTO dispensing_log (
+                    start_time, end_time,
+                    target_reagent_a_ml,   dispensed_reagent_a_ml,
+                    target_reagent_b_ml,   dispensed_reagent_b_ml,
+                    status, stop_reason, operator
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                snapshot["start_time"],
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                snapshot["reagent_a"],
+                snapshot["dispensed_a"],
+                snapshot["reagent_b"],
+                snapshot["dispensed_b"],
+                "EMERGENCY_STOP",
+                data.get("reason", "Emergency stop triggered"),
+                snapshot["operator"]
+            ))
+            conn.commit()
+            conn.close()
 
     return jsonify({"status": "stopped", "esp32_command": "sent" if success else "failed"})
 
@@ -384,31 +378,44 @@ def emergency_stop():
 def complete_dispense():
     send_command_to_esp32("complete")  # best-effort fallback
 
+    # Step 1 — snapshot and mark inactive under session_lock only
+    snapshot = None
     with session_lock:
         if dispense_session["active"]:
-            with db_lock:
-                conn = get_db()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO dispensing_log (
-                        start_time, end_time,
-                        target_reagent_a_ml,   dispensed_reagent_a_ml,
-                        target_reagent_b_ml,   dispensed_reagent_b_ml,
-                        status, operator
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    dispense_session["start_time"],
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    dispense_session["reagent_a"],
-                    dispense_session["dispensed_a"],  # real sensor value
-                    dispense_session["reagent_b"],
-                    dispense_session["dispensed_b"],  # real sensor value
-                    "COMPLETED",
-                    dispense_session["operator"]
-                ))
-                conn.commit()
-                conn.close()
-            dispense_session["active"] = False
+            snapshot = {
+                "start_time":  dispense_session["start_time"],
+                "reagent_a":   dispense_session["reagent_a"],
+                "dispensed_a": dispense_session["dispensed_a"],
+                "reagent_b":   dispense_session["reagent_b"],
+                "dispensed_b": dispense_session["dispensed_b"],
+                "operator":    dispense_session["operator"],
+            }
+            dispense_session["active"] = False  # mark inactive immediately
+
+    # Step 2 — write to DB under db_lock only (session_lock already released)
+    if snapshot:
+        with db_lock:
+            conn = get_db()
+            cur  = conn.cursor()
+            cur.execute("""
+                INSERT INTO dispensing_log (
+                    start_time, end_time,
+                    target_reagent_a_ml,   dispensed_reagent_a_ml,
+                    target_reagent_b_ml,   dispensed_reagent_b_ml,
+                    status, operator
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                snapshot["start_time"],
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                snapshot["reagent_a"],
+                snapshot["dispensed_a"],
+                snapshot["reagent_b"],
+                snapshot["dispensed_b"],
+                "COMPLETED",
+                snapshot["operator"]
+            ))
+            conn.commit()
+            conn.close()
 
     return jsonify({"status": "completed"})
 
@@ -468,15 +475,26 @@ def update_progress():
 @app.route("/history")
 @login_required
 def get_history():
+    role     = session.get("role")
+    username = session.get("username")
+
     with db_lock:
         conn = get_db()
-        cur = conn.cursor()
-        # Only show finalised records — exclude IN_PROGRESS
-        cur.execute("""
-            SELECT * FROM dispensing_log
-            WHERE status IN ('COMPLETED', 'EMERGENCY_STOP')
-            ORDER BY id DESC
-        """)
+        cur  = conn.cursor()
+        if role == "admin":
+            cur.execute("""
+                SELECT * FROM dispensing_log
+                WHERE status IN ('COMPLETED','EMERGENCY_STOP')
+                ORDER BY id DESC
+            """)
+        else:
+            # Operators only see their own logs
+            cur.execute("""
+                SELECT * FROM dispensing_log
+                WHERE status IN ('COMPLETED','EMERGENCY_STOP')
+                AND operator = ?
+                ORDER BY id DESC
+            """, (username,))
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
 
@@ -571,4 +589,10 @@ def handle_exception(e):
 # -------------------- Main --------------------
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True, port=5000, host="0.0.0.0", threaded=True)
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        local_ip = "127.0.0.1"
+    print(f"Local:   http://localhost:8000")
+    print(f"Network: http://{local_ip}:8000")
+    app.run(debug=True, port=8000, host="0.0.0.0", threaded=True)

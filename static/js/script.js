@@ -141,13 +141,39 @@ function showUserMsg(msg, type) {
 }
 
 // ============================================================
-//  Dark Mode
+//  Dark Mode — default dark
 // ============================================================
 function toggleDarkMode() {
-    const html = document.documentElement;
+    const html   = document.documentElement;
     const isDark = html.getAttribute('data-theme') === 'dark';
     html.setAttribute('data-theme', isDark ? 'light' : 'dark');
-    document.getElementById('darkModeIcon').textContent = isDark ? '🌙 Dark Mode' : '☀ Light Mode';
+    document.getElementById('darkModeIcon').textContent = isDark ? '🌙' : '☀';
+    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+}
+
+function initTheme() {
+    const saved = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    document.getElementById('darkModeIcon').textContent = saved === 'dark' ? '☀' : '🌙';
+}
+
+// ============================================================
+//  Log Drawer
+// ============================================================
+function openLogDrawer() {
+    document.getElementById('logDrawer').classList.add('open');
+    document.getElementById('drawerOverlay').classList.add('open');
+    // Update drawer subtitle based on role
+    const role = document.getElementById('roleBadge') ?
+        document.getElementById('roleBadge').textContent.toLowerCase() : 'operator';
+    document.getElementById('drawerSub').textContent =
+        currentUserRole === 'admin' ? 'All operator records' : 'Your records only';
+    updateHistory(0);
+}
+
+function closeLogDrawer() {
+    document.getElementById('logDrawer').classList.remove('open');
+    document.getElementById('drawerOverlay').classList.remove('open');
 }
 
 // ============================================================
@@ -196,10 +222,11 @@ function updateSummary() {
     document.getElementById('summaryVolB').textContent  = `${b} ml`;
     document.getElementById('summaryTotal').textContent = `${a + b} ml`;
 
+    // Ratio text
     let ratio = '—';
     if (a > 0 && b > 0) {
         const gcd = (x, y) => y === 0 ? x : gcd(y, x % y);
-        const g = gcd(a, b);
+        const g   = gcd(a, b);
         ratio = `${a / g}:${b / g}`;
     } else if (a > 0) {
         ratio = 'A only';
@@ -208,13 +235,22 @@ function updateSummary() {
     }
     document.getElementById('summaryRatio').textContent = ratio;
 
-    // Also update timeline volumes
+    // Ratio bar visual
+    const total = a + b;
+    const pctA  = total > 0 ? (a / total * 100).toFixed(1) : 0;
+    const pctB  = total > 0 ? (b / total * 100).toFixed(1) : 0;
+    const segA  = document.getElementById('ratioSegA');
+    const segB  = document.getElementById('ratioSegB');
+    if (segA) segA.style.width = pctA + '%';
+    if (segB) segB.style.width = pctB + '%';
+
+    // Timeline volumes
     document.getElementById('seqVol1').textContent = a > 0 ? `${a} ml` : 'SKIP';
     document.getElementById('seqVol2').textContent = b > 0 ? `${b} ml` : 'SKIP';
 
     // Hide pause block if only one pump runs
     const pauseEl = document.getElementById('seqPause');
-    pauseEl.classList.toggle('hidden', !(a > 0 && b > 0));
+    if (pauseEl) pauseEl.style.display = (a > 0 && b > 0) ? '' : 'none';
 }
 
 // ============================================================
@@ -236,12 +272,22 @@ function resetTimeline() {
 //  Pump State Helper
 // ============================================================
 function setPumpState(pump, state) {
-    const dot   = document.getElementById(`pump${pump}Dot`);
-    const label = document.getElementById(`pump${pump}State`);
-    dot.className   = `pump-dot ${state === 'idle' ? '' : state}`;
-    label.className = `pump-state ${state === 'idle' ? '' : state}`;
-    const stateText = { idle: 'IDLE', active: 'RUNNING', done: 'DONE', skipped: 'SKIPPED', stopped: 'STOPPED' };
-    label.textContent = stateText[state] || 'IDLE';
+    const indicator = document.getElementById(`pump${pump}Indicator`);
+    const dot       = document.getElementById(`pump${pump}Dot`);
+    const statusTxt = document.getElementById(`pump${pump}StatusText`);
+
+    const stateMap = {
+        idle:    { cls: '',              text: 'IDLE'    },
+        active:  { cls: 'state-running', text: 'RUNNING' },
+        done:    { cls: 'state-done',    text: 'DONE'    },
+        skipped: { cls: 'state-skipped', text: 'SKIPPED' },
+        stopped: { cls: 'state-stopped', text: 'STOPPED' },
+    };
+    const s = stateMap[state] || stateMap.idle;
+
+    if (indicator) indicator.className = `pump-state-badge ${s.cls}`;
+    if (dot)       dot.className       = `pump-dot`;
+    if (statusTxt) statusTxt.textContent = s.text;
 }
 
 function resetPumpStates() {
@@ -279,22 +325,21 @@ function showProgressBar() {
 // ============================================================
 //  Slider Helpers
 // ============================================================
-function bindSlider(sliderId, valueId, tooltipId) {
-    const slider  = document.getElementById(sliderId);
+function bindSlider(sliderId, valueId) {
+    const slider   = document.getElementById(sliderId);
     const valueBox = document.getElementById(valueId);
     slider.addEventListener('input', () => {
         valueBox.textContent = slider.value;
-        updateTooltip(sliderId, tooltipId);
         updateSummary();
     });
 }
 
 function updateTooltip(sliderId, tooltipId) {
-    const slider  = document.getElementById(sliderId);
-    const tooltip = document.getElementById(tooltipId);
-    const percent = ((slider.value - slider.min) / (slider.max - slider.min)) * 100;
-    tooltip.textContent = slider.value + ' ml';
-    tooltip.style.left  = percent + '%';
+    // Tooltip spans removed in new design — no-op kept for compatibility
+    const slider = document.getElementById(sliderId);
+    const valueId = sliderId === 'waterSlider' ? 'waterValue' : 'syrupValue';
+    const valueBox = document.getElementById(valueId);
+    if (valueBox) valueBox.textContent = slider.value;
 }
 
 function setPreset(a, b) {
@@ -302,8 +347,6 @@ function setPreset(a, b) {
     document.getElementById('syrupSlider').value = b;
     document.getElementById('waterValue').textContent = a;
     document.getElementById('syrupValue').textContent = b;
-    updateTooltip('waterSlider', 'waterTooltip');
-    updateTooltip('syrupSlider', 'syrupTooltip');
     updateSummary();
     showStatus(`Protocol loaded: ${reagentNames.A} ${a} ml | ${reagentNames.B} ${b} ml`, 'info');
 }
@@ -628,7 +671,7 @@ function updateChart(progress) {
 function showStatus(message, type = 'info') {
     const statusBox = document.getElementById('statusBox');
     statusBox.innerHTML = message;
-    statusBox.className = `lab-status-box alert-${type}`;
+    statusBox.className = `live-monitor status-${type}`;
 }
 
 // ============================================================
@@ -673,47 +716,54 @@ function updateHistory(page = 0) {
         .then(events => {
             const list = document.getElementById('historyList');
             list.innerHTML = '';
+
             if (events.length === 0) {
-                list.innerHTML = '<li class="list-group-item lab-log-empty">No dispense records found</li>';
+                list.innerHTML = '<li class="log-empty">No dispense records found.</li>';
+                document.getElementById('pageInfo').textContent = 'Page 1';
+                document.getElementById('prevHistory').disabled = true;
+                document.getElementById('nextHistory').disabled = true;
                 return;
             }
 
-            events.reverse();
             currentHistoryPage = page;
-            const start = page * historyPerPage;
-            const end   = start + historyPerPage;
+            const start     = page * historyPerPage;
+            const end       = start + historyPerPage;
+            const pageEvents = events.slice(start, end);
+            const totalPages = Math.ceil(events.length / historyPerPage);
 
-            events.slice(start, end).forEach(event => {
+            pageEvents.forEach(event => {
                 const li = document.createElement('li');
-                li.classList.add('list-group-item', 'd-flex', 'justify-content-between', 'align-items-start');
+                li.className = 'log-item ' + (event.type === 'DISPENSE' ? 'log-completed' : 'log-emergency');
 
-                const contentDiv = document.createElement('div');
-                const operatorTag = `<span class="log-operator">👤 ${event.operator || 'unknown'}</span>`;
-                const timeTag     = `<small class="text-muted">Start: ${event.timestamp}${event.end_time ? ' &nbsp;|&nbsp; End: ' + event.end_time : ''}</small>`;
+                const typeLabel = event.type === 'DISPENSE' ? 'COMPLETED' : 'EMERGENCY STOP';
+                const typeClass = event.type === 'DISPENSE' ? 'type-completed' : 'type-emergency';
 
-                if (event.type === 'DISPENSE') {
-                    li.classList.add('list-group-item-success');
-                    contentDiv.innerHTML = `<strong>[COMPLETED]</strong> ${operatorTag}<br>${event.message}<br>${timeTag}`;
-                } else if (event.type === 'EMERGENCY') {
-                    li.classList.add('list-group-item-danger');
-                    contentDiv.innerHTML = `<strong>[EMERGENCY STOP]</strong> ${operatorTag}<br>${event.message}<br>${timeTag}`;
-                } else {
-                    contentDiv.innerHTML = event.message;
-                }
+                const deleteBtn = currentUserRole === 'admin'
+                    ? `<button class="log-delete-btn" onclick="deleteHistory(${event.id})">✕</button>`
+                    : '';
 
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = "btn btn-sm btn-outline-danger";
-                if (currentUserRole !== 'admin') deleteBtn.style.display = 'none';
-                deleteBtn.innerHTML = "✕";
-                deleteBtn.onclick   = () => deleteHistory(event.id);
-
-                li.appendChild(contentDiv);
-                li.appendChild(deleteBtn);
+                li.innerHTML = `
+                    <div class="log-item-content">
+                        <div class="log-type ${typeClass}">${typeLabel}</div>
+                        <div class="log-message">${event.message}</div>
+                        <div class="log-meta">
+                            <span class="log-operator">👤 ${event.operator || 'unknown'}</span>
+                            <span class="log-time">⏱ ${event.timestamp}</span>
+                            ${event.end_time ? `<span class="log-time">→ ${event.end_time}</span>` : ''}
+                        </div>
+                    </div>
+                    ${deleteBtn}
+                `;
                 list.appendChild(li);
             });
 
+            document.getElementById('pageInfo').textContent = `Page ${page + 1} / ${totalPages}`;
             document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
             document.getElementById('nextHistory').disabled = (end >= events.length);
+        })
+        .catch(() => {
+            document.getElementById('historyList').innerHTML =
+                '<li class="log-empty">Failed to load records.</li>';
         });
 }
 
@@ -752,17 +802,14 @@ function clearHistory() {
 //  Initialize
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
-    bindSlider('waterSlider', 'waterValue', 'waterTooltip');
-    bindSlider('syrupSlider', 'syrupValue', 'syrupTooltip');
-    updateTooltip('waterSlider', 'waterTooltip');
-    updateTooltip('syrupSlider', 'syrupTooltip');
+    initTheme();
+    bindSlider('waterSlider', 'waterValue');
+    bindSlider('syrupSlider', 'syrupValue');
     updateSummary();
     initChart();
-    updateHistory();
     resetPumpStates();
     resetTimeline();
 
-    // Fetch session info and apply role-based UI
     fetch('/session-info')
         .then(res => res.json())
         .then(data => applyRoleUI(data.role))
@@ -772,31 +819,32 @@ document.addEventListener('DOMContentLoaded', () => {
 // ============================================================
 //  Controller Status Check
 // ============================================================
-function updateESP32ButtonState() {
-    const button     = document.querySelector('.btn-success');
-    const statusSpan = document.getElementById('connectionStatus');
-    button.disabled  = statusSpan.classList.contains('text-danger');
+function updateESP32ButtonState(connected) {
+    const btn = document.querySelector('.btn-dispense');
+    if (btn) btn.disabled = !connected;
 }
 
 function checkESP32Status() {
     fetch('/esp32/status', { cache: 'no-store' })
         .then(res => res.json())
         .then(data => {
-            const statusSpan = document.getElementById('connectionStatus');
-            const connected  = data.status === "connected";
-            statusSpan.textContent = connected ? '⬤ Controller Online' : '⬤ Controller Offline';
-            statusSpan.className   = connected
-                ? 'status-value text-success fw-bold'
-                : 'status-value text-danger fw-bold';
-            updateESP32ButtonState();
+            const connected    = data.status === 'connected';
+            const statusSpan   = document.getElementById('connectionStatus');
+            const statusDot    = document.getElementById('statusDot');
+            if (statusSpan) statusSpan.textContent = connected ? 'Controller Online' : 'Controller Offline';
+            if (statusDot)  {
+                statusDot.className = 'status-dot ' + (connected ? 'connected' : 'error');
+            }
+            updateESP32ButtonState(connected);
         })
         .catch(() => {
             const statusSpan = document.getElementById('connectionStatus');
-            statusSpan.textContent = '⬤ Controller Offline';
-            statusSpan.className   = 'status-value text-danger fw-bold';
-            updateESP32ButtonState();
+            const statusDot  = document.getElementById('statusDot');
+            if (statusSpan) statusSpan.textContent = 'Controller Offline';
+            if (statusDot)  statusDot.className    = 'status-dot error';
+            updateESP32ButtonState(false);
         });
 }
 
-setInterval(checkESP32Status, 500);
+setInterval(checkESP32Status, 2000);
 document.addEventListener('DOMContentLoaded', checkESP32Status);
