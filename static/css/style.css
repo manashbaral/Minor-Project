@@ -394,7 +394,7 @@ body {
 .dot-a { background: var(--reagent-a); }
 .dot-b { background: var(--reagent-b); }
 
-.ratio-bar-wrap { }
+/*.ratio-bar-wrap { } */
 .ratio-bar {
     height: 6px;
     border-radius: 3px;
