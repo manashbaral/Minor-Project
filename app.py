@@ -8,6 +8,9 @@ import threading
 import os
 import socket
 
+# esp32 auth key 
+ESP32_SECRET = "amrds-device-key-2024"
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "lab-secret-change-in-production")
 
@@ -17,7 +20,7 @@ DB_NAME  = os.path.join(BASE_DIR, "history.db")
 print(f"Database path: {DB_NAME}")
 
 # -------------------- ESP32 configuration --------------------
-ESP32_IP = "192.168.76.3"
+ESP32_IP = "192.168.190.3"
 esp32_connected = False
 esp32_last_seen = None
 
@@ -231,6 +234,41 @@ def delete_user(user_id):
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# -------------------- Change Password (any logged-in user) --------------------
+@app.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    data             = request.get_json(force=True) or {}
+    current_password = data.get("current_password", "")
+    new_password     = data.get("new_password", "")
+
+    if not current_password or not new_password:
+        return jsonify({"status": "error", "message": "All fields are required."}), 400
+    if len(new_password) < 6:
+        return jsonify({"status": "error", "message": "New password must be at least 6 characters."}), 400
+
+    user_id = session.get("user_id")
+
+    with db_lock:
+        conn = get_db()
+        cur  = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        user = cur.fetchone()
+        conn.close()
+
+    if not user or not check_password_hash(user["password_hash"], current_password):
+        return jsonify({"status": "error", "message": "Current password is incorrect."}), 401
+
+    with db_lock:
+        conn = get_db()
+        cur  = conn.cursor()
+        cur.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                    (generate_password_hash(new_password), user_id))
+        conn.commit()
+        conn.close()
+
+    return jsonify({"status": "success", "message": "Password updated successfully."})
 
 # -------------------- ESP32 Heartbeat --------------------
 @app.route("/esp32/heartbeat", methods=["POST"])
@@ -458,9 +496,19 @@ def get_progress():
             "pct_b":       pct_b,
         })
 
+
+def esp32_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if request.headers.get("X-Device-Key") != ESP32_SECRET:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 # -------------------- Update Progress --------------------
 @app.route("/update-progress", methods=["POST"])
-@login_required
+@esp32_auth
 def update_progress():
     # Updates in-memory amounts from ESP32 flow sensor (future)
     # No DB write here — DB is only written on complete or emergency stop

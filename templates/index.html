@@ -7,7 +7,6 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
 </head>
 <body>
@@ -19,7 +18,7 @@
             <span class="dash-logo-icon">⚗</span>
             <div>
                 <div class="dash-logo-title">AMRDS</div>
-                <div class="dash-logo-sub">Multi-Reagent Dispensing</div>
+                <div class="dash-logo-sub">Multi-Reagent Dispensing System</div>
             </div>
         </div>
     </div>
@@ -30,33 +29,49 @@
         </div>
     </div>
     <div class="dash-nav-right">
-        <button class="nav-icon-btn" onclick="toggleDarkMode()" title="Toggle theme">
-            <span id="darkModeIcon">☀</span>
-        </button>
-        <button class="nav-icon-btn" onclick="openLogDrawer()" title="View dispense log">
-            📋
-        </button>
-        {% if role == 'admin' %}
-        <button class="nav-icon-btn" onclick="openUserModal()" title="Manage users">
-            ⚙
-        </button>
-        {% endif %}
-        <div class="nav-user-chip">
-            <span class="nav-user-avatar">{{ username[0] | upper }}</span>
-            <span class="nav-user-name">{{ username }}</span>
-            <span class="nav-role-pill role-{{ role }}">{{ role }}</span>
+        <div class="nav-tooltip-wrap">
+            <button class="nav-icon-btn" onclick="toggleDarkMode()">
+                <span id="darkModeIcon">☀</span>
+            </button>
+            <span class="nav-tooltip">Toggle Theme</span>
         </div>
-        <button class="nav-logout-btn" onclick="doLogout()">Sign out</button>
+        {% if role == 'admin' %}
+        <div class="nav-tooltip-wrap">
+            <button class="nav-icon-btn" onclick="openUserModal()">⚙</button>
+            <span class="nav-tooltip">Manage Users</span>
+        </div>
+        {% endif %}
+        <div class="user-dropdown-wrap" id="userDropdownWrap">
+            <div class="nav-user-chip" onclick="toggleUserDropdown()" id="userChip">
+                <span class="nav-user-avatar">{{ username[0] | upper }}</span>
+                <span class="nav-user-name">{{ username }}</span>
+                <span class="nav-role-pill role-{{ role }}">{{ role }}</span>
+                <span class="user-chip-caret">▾</span>
+            </div>
+            <div class="user-dropdown" id="userDropdown">
+                <div class="user-dropdown-header">
+                    <div class="ud-avatar">{{ username[0] | upper }}</div>
+                    <div>
+                        <div class="ud-name">{{ username }}</div>
+                        <div class="ud-role">{{ role }}</div>
+                    </div>
+                </div>
+                <div class="user-dropdown-divider"></div>
+                <button class="user-dropdown-item" onclick="closeUserDropdown()">👤 Profile</button>
+                <button class="user-dropdown-item" onclick="closeUserDropdown(); openLogDrawer()">📋 View Activity</button>
+                <button class="user-dropdown-item" onclick="closeUserDropdown(); openChangePasswordModal()">🔑 Change Password</button>
+                <div class="user-dropdown-divider"></div>
+                <button class="user-dropdown-item danger" onclick="doLogout()">⏏ Sign Out</button>
+            </div>
+        </div>
     </div>
 </nav>
 
 <!-- ===== MAIN DASHBOARD ===== -->
 <main class="dash-main">
 
-    <!-- ── Row 1: Reagent Cards ── -->
+    <!-- Row 1: Reagent Cards (sliders only, no status badges) -->
     <div class="dash-grid-2 mb-4">
-
-        <!-- Reagent A Card -->
         <div class="dash-card reagent-card-a">
             <div class="dash-card-header">
                 <div class="d-flex align-items-center gap-2">
@@ -69,18 +84,10 @@
                 <div class="volume-display" id="waterValue">100</div>
                 <div class="volume-unit">ml</div>
                 <input type="range" class="dash-slider slider-a" id="waterSlider" min="0" max="500" value="100">
-                <div class="slider-labels">
-                    <span>0 ml</span>
-                    <span>500 ml</span>
-                </div>
-                <div class="pump-state-badge" id="pump1Indicator">
-                    <span class="pump-dot" id="pump1Dot"></span>
-                    <span id="pump1StatusText">IDLE</span>
-                </div>
+                <div class="slider-labels"><span>0 ml</span><span>500 ml</span></div>
             </div>
         </div>
 
-        <!-- Reagent B Card -->
         <div class="dash-card reagent-card-b">
             <div class="dash-card-header">
                 <div class="d-flex align-items-center gap-2">
@@ -93,22 +100,32 @@
                 <div class="volume-display" id="syrupValue">50</div>
                 <div class="volume-unit">ml</div>
                 <input type="range" class="dash-slider slider-b" id="syrupSlider" min="0" max="500" value="50">
-                <div class="slider-labels">
-                    <span>0 ml</span>
-                    <span>500 ml</span>
-                </div>
-                <div class="pump-state-badge" id="pump2Indicator">
-                    <span class="pump-dot" id="pump2Dot"></span>
-                    <span id="pump2StatusText">IDLE</span>
-                </div>
+                <div class="slider-labels"><span>0 ml</span><span>500 ml</span></div>
             </div>
         </div>
     </div>
 
-    <!-- ── Row 2: Summary + Sequence ── -->
-    <div class="dash-grid-2 mb-4">
+    <!-- Row 2: Quick Protocols -->
+    <div class="dash-card presets-card mb-4">
+        <div class="dash-card-header">
+            <span class="dash-card-title">Quick Protocols</span>
+        </div>
+        <div class="dash-card-body presets-body">
+            <button class="preset-btn" onclick="setPreset(200,50)">Buffer Solution<span class="preset-hint">200 ml A + 50 ml B</span></button>
+            <button class="preset-btn" onclick="setPreset(150,100)">Sample Dilution<span class="preset-hint">150 ml A + 100 ml B</span></button>
+            <button class="preset-btn" onclick="setPreset(300,0)">Reagent A Only<span class="preset-hint">300 ml A</span></button>
+        </div>
+    </div>
 
-        <!-- Volume Summary -->
+    <!-- Row 3: Controls + Summary -->
+    <div class="dash-grid-2 mb-4">
+        <div class="action-bare">
+            <button class="btn-dispense" id="dispenseBtn" onclick="startDispensing()">
+                <span id="dispenseBtnText">▶ Initiate Dispense</span>
+            </button>
+            <button class="btn-stop" onclick="emergencyStop()">■ Emergency Stop</button>
+        </div>
+
         <div class="dash-card">
             <div class="dash-card-header">
                 <span class="dash-card-title">Volume Summary</span>
@@ -130,58 +147,20 @@
                         <div class="metric-value" id="summaryTotal">150 ml</div>
                     </div>
                 </div>
-                <div class="ratio-bar-wrap mt-3">
-                    <div class="ratio-bar" id="ratioBar">
+                <div class="ratio-box mt-3">
+                    <div class="ratio-box-label">Ratio A : B</div>
+                    <div class="ratio-bar mt-2">
                         <div class="ratio-seg seg-a" id="ratioSegA" style="width:67%"></div>
                         <div class="ratio-seg seg-b" id="ratioSegB" style="width:33%"></div>
                     </div>
-                    <div class="ratio-label">Ratio A:B = <strong id="summaryRatio">2:1</strong></div>
-                </div>
-
-                <!-- Presets -->
-                <div class="mt-3">
-                    <div class="preset-label mb-2">Quick Protocols</div>
-                    <div class="preset-grid">
-                        <button class="preset-btn" onclick="setPreset(200, 50)">Buffer Solution</button>
-                        <button class="preset-btn" onclick="setPreset(150, 100)">Sample Dilution</button>
-                        <button class="preset-btn" onclick="setPreset(300, 0)">Reagent A Only</button>
+                    <div class="ratio-display mt-2">
+                        <span class="ratio-tag tag-a"><span id="summaryLabelA2">A</span></span>
+                        <span class="ratio-value" id="summaryRatio">2 : 1</span>
+                        <span class="ratio-tag tag-b"><span id="summaryLabelB2">B</span></span>
                     </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- Sequence Timeline -->
-        <div class="dash-card">
-            <div class="dash-card-header">
-                <span class="dash-card-title">Dispense Sequence</span>
-            </div>
-            <div class="dash-card-body">
-                <div class="sequence-timeline" id="sequenceTimeline">
-                    <div class="seq-block" id="seqBlock1">
-                        <div class="seq-icon">①</div>
-                        <div class="seq-info">
-                            <div class="seq-name" id="seqLabel1">Pump 1 — Reagent A</div>
-                            <div class="seq-vol" id="seqVol1">100 ml</div>
-                        </div>
-                        <div class="seq-state" id="seqState1">IDLE</div>
-                    </div>
-                    <div class="seq-connector" id="seqPause">
-                        <div class="seq-line"></div>
-                        <div class="seq-pause-label">2s pause</div>
-                        <div class="seq-line"></div>
-                    </div>
-                    <div class="seq-block" id="seqBlock2">
-                        <div class="seq-icon">②</div>
-                        <div class="seq-info">
-                            <div class="seq-name" id="seqLabel2">Pump 2 — Reagent B</div>
-                            <div class="seq-vol" id="seqVol2">50 ml</div>
-                        </div>
-                        <div class="seq-state" id="seqState2">IDLE</div>
-                    </div>
-                </div>
-
-                <!-- Progress -->
-                <div class="mt-3">
+                <!-- Progress bar — hidden until dispensing starts -->
+                <div class="mt-3" id="progressContainer" style="display:none">
                     <div class="d-flex justify-content-between mb-1">
                         <span class="prog-label" id="progressLabel">Ready</span>
                         <span class="prog-pct" id="progressPct">0%</span>
@@ -194,42 +173,127 @@
         </div>
     </div>
 
-    <!-- ── Row 3: Live Monitor + Chart ── -->
-    <div class="dash-grid-2 mb-4">
-
-        <!-- Live Monitor -->
-        <div class="dash-card">
-            <div class="dash-card-header">
-                <span class="dash-card-title">Live Monitor</span>
+    <!-- Row 4: Live Monitor -->
+    <div class="dash-card mb-4">
+        <div class="dash-card-header">
+            <span class="dash-card-title">Live Monitor</span>
+            <div class="d-flex align-items-center gap-2">
+                <button class="nav-icon-btn" onclick="resetMonitor()" title="Reset Monitor">↺</button>
                 <span class="live-dot-wrap"><span class="live-dot"></span> LIVE</span>
             </div>
-            <div class="dash-card-body">
-                <div class="live-monitor" id="statusBox">
-                    System ready. Configure volumes and initiate dispense.
+        </div>
+        <div class="dash-card-body" style="padding:0">
+
+            <!-- Vessel Flasks -->
+            <div class="mon-section mon-vessels">
+                <!-- Vessel A -->
+                <div class="vessel-card">
+                    <svg class="flask-svg" viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <clipPath id="flaskClipA">
+                                <path d="M38,10 L38,45 L10,110 Q8,120 15,128 Q22,135 50,135 Q78,135 85,128 Q92,120 90,110 L62,45 L62,10 Z"/>
+                            </clipPath>
+                        </defs>
+                        <rect id="flaskFillA" x="5" y="135" width="90" height="130" fill="#3B8BD4" opacity="0.75" clip-path="url(#flaskClipA)"/>
+                        <path d="M38,10 L38,45 L10,110 Q8,120 15,128 Q22,135 50,135 Q78,135 85,128 Q92,120 90,110 L62,45 L62,10 Z" fill="none" stroke="var(--border-md,#8b949e)" stroke-width="1.5"/>
+                        <rect x="34" y="6" width="32" height="6" rx="2" fill="var(--border-md,#8b949e)"/>
+                        <line x1="18" y1="115" x2="24" y2="115" stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="16" y1="105" x2="22" y2="105" stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="15" y1="95"  x2="21" y2="95"  stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="15" y1="85"  x2="21" y2="85"  stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="16" y1="75"  x2="22" y2="75"  stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <!-- Drip below neck, not inside flask -->
+                        <ellipse id="dripA" cx="50" cy="137" rx="3" ry="4" fill="#3B8BD4" opacity="0" class="drip-hidden"/>
+                    </svg>
+                    <div class="vessel-info">
+                        <div class="vessel-vol-row">
+                            <span class="vessel-vol" id="monVolA">0.0 mL</span>
+                            <span class="vessel-target" id="monTargetA">Target: — mL</span>
+                        </div>
+                        <span class="mon-badge badge-idle" id="monBadgeA">Idle</span>
+                        <div class="mon-msg" id="monMsgA">Waiting to start…</div>
+                    </div>
+                    <div class="vessel-label" id="vesselLabelA">Reagent A</div>
+                </div>
+
+                <!-- Vessel B -->
+                <div class="vessel-card">
+                    <svg class="flask-svg" viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <clipPath id="flaskClipB">
+                                <!-- FIXED: was missing "50,135" point causing broken outline -->
+                                <path d="M38,10 L38,45 L10,110 Q8,120 15,128 Q22,135 50,135 Q78,135 85,128 Q92,120 90,110 L62,45 L62,10 Z"/>
+                            </clipPath>
+                        </defs>
+                        <rect id="flaskFillB" x="5" y="135" width="90" height="130" fill="#1D9E75" opacity="0.75" clip-path="url(#flaskClipB)"/>
+                        <path d="M38,10 L38,45 L10,110 Q8,120 15,128 Q22,135 50,135 Q78,135 85,128 Q92,120 90,110 L62,45 L62,10 Z" fill="none" stroke="var(--border-md,#8b949e)" stroke-width="1.5"/>
+                        <rect x="34" y="6" width="32" height="6" rx="2" fill="var(--border-md,#8b949e)"/>
+                        <line x1="18" y1="115" x2="24" y2="115" stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="16" y1="105" x2="22" y2="105" stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="15" y1="95"  x2="21" y2="95"  stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="15" y1="85"  x2="21" y2="85"  stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <line x1="16" y1="75"  x2="22" y2="75"  stroke="var(--text-3,#8b949e)" stroke-width="0.8"/>
+                        <ellipse id="dripB" cx="50" cy="137" rx="3" ry="4" fill="#1D9E75" opacity="0" class="drip-hidden"/>
+                    </svg>
+                    <div class="vessel-info">
+                        <div class="vessel-vol-row">
+                            <span class="vessel-vol" id="monVolB">0.0 mL</span>
+                            <span class="vessel-target" id="monTargetB">Target: — mL</span>
+                        </div>
+                        <span class="mon-badge badge-idle" id="monBadgeB">Idle</span>
+                        <div class="mon-msg" id="monMsgB">Waiting for Reagent A to complete…</div>
+                    </div>
+                    <div class="vessel-label" id="vesselLabelB">Reagent B</div>
                 </div>
             </div>
-        </div>
 
-        <!-- Flow Chart -->
-        <div class="dash-card">
-            <div class="dash-card-header">
-                <span class="dash-card-title">Flow Rate</span>
-                <span class="chart-legend" id="chartLegend">Pump 1 — ml/s</span>
+            <!-- Pump Cards -->
+            <div class="mon-section mon-pumps">
+                <div class="pump-card" id="pumpCard1">
+                    <div class="pump-icon" id="pumpIcon1">⚙</div>
+                    <div class="pump-card-info">
+                        <div class="pump-card-name">Pump 1</div>
+                        <div class="pump-card-state" id="pumpState1">Idle</div>
+                    </div>
+                    <span class="mon-badge badge-idle" id="pumpBadge1">Idle</span>
+                </div>
+                <div class="pump-card" id="pumpCard2">
+                    <div class="pump-icon" id="pumpIcon2">⚙</div>
+                    <div class="pump-card-info">
+                        <div class="pump-card-name">Pump 2</div>
+                        <div class="pump-card-state" id="pumpState2">Idle</div>
+                    </div>
+                    <span class="mon-badge badge-idle" id="pumpBadge2">Idle</span>
+                </div>
             </div>
-            <div class="dash-card-body">
-                <canvas id="flowChart" height="160"></canvas>
-            </div>
-        </div>
-    </div>
 
-    <!-- ── Row 4: Action Buttons ── -->
-    <div class="dash-action-row mb-4">
-        <button class="btn-dispense" onclick="startDispensing()">
-            <span id="dispenseBtnText">▶ Initiate Dispense</span>
-        </button>
-        <button class="btn-stop" onclick="emergencyStop()">
-            ■ Emergency Stop
-        </button>
+            <!-- Status Pills + Progress bar -->
+            <div class="mon-section mon-status-section">
+                <div class="mon-pills">
+                    <div class="mon-pill"><span class="pill-label">Sequence</span><span class="pill-val" id="pillSequence">Idle</span></div>
+                    <div class="mon-pill"><span class="pill-label">Phase</span><span class="pill-val" id="pillPhase">—</span></div>
+                    <div class="mon-pill"><span class="pill-label">Flow A</span><span class="pill-val" id="pillFlowA">— mL/s</span></div>
+                    <div class="mon-pill"><span class="pill-label">Flow B</span><span class="pill-val" id="pillFlowB">— mL/s</span></div>
+                    <div class="mon-pill"><span class="pill-label">Elapsed</span><span class="pill-val" id="pillElapsed">—</span></div>
+                </div>
+                <div class="mon-prog-wrap">
+                    <div class="mon-prog-bar">
+                        <div class="mon-seg-a" id="monSegA" style="width:0%"></div>
+                        <div class="mon-seg-b" id="monSegB" style="width:0%"></div>
+                    </div>
+                    <div class="mon-prog-legend">
+                        <span><span class="mon-dot mon-dot-a"></span> <span id="monLegendA">Reagent A</span></span>
+                        <span><span class="mon-dot mon-dot-b"></span> <span id="monLegendB">Reagent B</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live status text -->
+            <div class="mon-section">
+                <div class="live-monitor" id="statusBox">System ready. Configure volumes and initiate dispense.</div>
+            </div>
+
+        </div>
     </div>
 
 </main>
@@ -238,20 +302,18 @@
 <div class="drawer-overlay" id="drawerOverlay" onclick="closeLogDrawer()"></div>
 <div class="log-drawer" id="logDrawer">
     <div class="drawer-header">
-        <div>
+        <button class="drawer-close" onclick="closeLogDrawer()">← Back</button>
+        <div class="drawer-header-center">
             <div class="drawer-title">📋 Dispense Log</div>
             <div class="drawer-sub" id="drawerSub">All records</div>
         </div>
         <div class="d-flex gap-2 align-items-center">
             <button class="drawer-btn" onclick="exportCSV()">⬇ CSV</button>
             <button class="drawer-btn danger admin-only" onclick="clearHistory()">Clear</button>
-            <button class="drawer-close" onclick="closeLogDrawer()">✕</button>
         </div>
     </div>
     <div class="drawer-body">
-        <ul class="log-list" id="historyList">
-            <li class="log-empty">Loading...</li>
-        </ul>
+        <ul class="log-list" id="historyList"><li class="log-empty">Loading...</li></ul>
         <div class="drawer-pagination">
             <button class="drawer-page-btn" id="prevHistory" onclick="prevHistory()">◀ Prev</button>
             <span class="drawer-page-info" id="pageInfo">Page 1</span>
@@ -308,6 +370,37 @@
     </div>
 </div>
 
+<!-- Change Password Modal -->
+<div class="modal fade" id="changePasswordModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content dash-modal">
+            <div class="modal-header dash-modal-header">
+                <h5 class="modal-title">🔑 Change Password</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="dash-label">Current Password</label>
+                    <input type="password" class="dash-input" id="currentPassword" placeholder="Current password">
+                </div>
+                <div class="mb-3">
+                    <label class="dash-label">New Password</label>
+                    <input type="password" class="dash-input" id="newPasswordChange" placeholder="New password">
+                </div>
+                <div class="mb-1">
+                    <label class="dash-label">Confirm New Password</label>
+                    <input type="password" class="dash-input" id="confirmNewPassword" placeholder="Confirm new password">
+                </div>
+                <div class="user-form-msg mt-2" id="changePasswordMsg"></div>
+            </div>
+            <div class="modal-footer dash-modal-footer">
+                <button class="btn-modal-cancel" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn-modal-confirm" onclick="submitChangePassword()">Update Password</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- User Management Modal -->
 <div class="modal fade" id="userModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -320,24 +413,10 @@
                 <div class="user-form-section mb-4">
                     <div class="section-label mb-3">Add New User</div>
                     <div class="row g-2 align-items-end">
-                        <div class="col-md-4">
-                            <label class="dash-label">Username</label>
-                            <input type="text" class="dash-input" id="newUsername" placeholder="e.g. jsmith">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="dash-label">Password</label>
-                            <input type="password" class="dash-input" id="newPassword" placeholder="Password">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="dash-label">Role</label>
-                            <select class="dash-input dash-select" id="newRole">
-                                <option value="operator">Operator</option>
-                                <option value="admin">Admin</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <button class="btn-modal-confirm w-100" onclick="addUser()">+ Add</button>
-                        </div>
+                        <div class="col-md-4"><label class="dash-label">Username</label><input type="text" class="dash-input" id="newUsername" placeholder="e.g. jsmith"></div>
+                        <div class="col-md-4"><label class="dash-label">Password</label><input type="password" class="dash-input" id="newPassword" placeholder="Password"></div>
+                        <div class="col-md-2"><label class="dash-label">Role</label><select class="dash-input dash-select" id="newRole"><option value="operator">Operator</option><option value="admin">Admin</option></select></div>
+                        <div class="col-md-2"><button class="btn-modal-confirm w-100" onclick="addUser()">+ Add</button></div>
                     </div>
                     <div class="user-form-msg mt-2" id="userFormMsg"></div>
                 </div>
