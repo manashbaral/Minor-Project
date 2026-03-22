@@ -1,71 +1,48 @@
 // ============================================================
-//  AMRDS — script.js  (v3 — real-data driven monitor)
-//
-//  Architecture change (v3):
-//  BEFORE: Two parallel systems
-//    - monTick (setInterval 100ms) — fake math simulation driving flask/vol UI
-//    - progressInterval (500ms)   — real /progress data driving only the status text
-//    Problems:
-//      • Flask fill and vol numbers showed fake math, not real sensor data
-//      • The /progress "dispensed" value stayed 0 with no sensors connected,
-//        so pct never reached 100%, the stage never resolved, pump ran forever
-//      • Bottom combined bar always showed 0 because it was fed from monTick vars
-//        that were never updated from the poll
-//
-//  AFTER (v3): One unified system
-//    - Single setInterval (500ms) polls /progress
-//    - ALL UI driven exclusively from that real data:
-//        flask fill, vol display, progress bar, combined bar, badges, status text
-//    - monTick simulation REMOVED entirely
-//    - Completion triggered by prog.active === false (set by Flask when ESP32
-//      calls /complete, which happens when the pump stops itself) OR pct >= 100
-//    - Elapsed timer is still client-side (Date.now delta) — always accurate
+//  AMRDS — script.js  (v4)
+//  New features: persistent reagent names, custom protocols,
+//  multi-step dispensing, inventory, analytics chart, PDF report,
+//  mobile layout support.
 // ============================================================
 
-// ============================================================
-//  Globals
-// ============================================================
+// ── Globals ──────────────────────────────────────────────────
 let dispensing         = false;
 let progressInterval   = null;
 let elapsedTimer       = null;
 let currentHistoryPage = 0;
-const historyPerPage   = 3;
+const historyPerPage   = 5;
 let currentUserRole    = null;
 let _renameModalInst   = null;
 let reagentNames       = { A: 'Reagent A', B: 'Reagent B' };
 let dispenseStartTime  = null;
+let analyticsChartInst = null;
 
-// ============================================================
-//  Tiny helpers
-// ============================================================
+// Multi-step: array of {pump,reagent,volume_ml,delay_after_s}
+let activeProtocolSteps = null;
+
+// ── Tiny helpers ─────────────────────────────────────────────
 function _set(id, val) {
     const el = document.getElementById(id);
     if (el) el.textContent = val;
 }
-
 function stopProgressPoll() {
     if (progressInterval) { clearInterval(progressInterval); progressInterval = null; }
 }
-
 function stopElapsedTimer() {
     if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
 }
 
-// ============================================================
-//  Auth
-// ============================================================
+// ── Auth ──────────────────────────────────────────────────────
 function doLogout() {
     if (!confirm('Sign out of the system?')) return;
     fetch('/logout', { method: 'POST' })
         .then(() => window.location.href = '/login')
         .catch(() => window.location.href = '/login');
 }
-
 function showSessionExpired() {
     const el = document.getElementById('sessionExpiredOverlay');
     if (el) el.style.display = 'flex';
 }
-
 const _origFetch = window.fetch;
 window.fetch = function(...args) {
     return _origFetch(...args).then(res => {
@@ -74,9 +51,7 @@ window.fetch = function(...args) {
     });
 };
 
-// ============================================================
-//  Role UI
-// ============================================================
+// ── Role UI ───────────────────────────────────────────────────
 function applyRoleUI(role) {
     currentUserRole = role;
     document.querySelectorAll('.admin-only').forEach(el => {
@@ -84,9 +59,7 @@ function applyRoleUI(role) {
     });
 }
 
-// ============================================================
-//  Theme
-// ============================================================
+// ── Theme ─────────────────────────────────────────────────────
 function toggleDarkMode() {
     const html   = document.documentElement;
     const isDark = html.getAttribute('data-theme') === 'dark';
@@ -94,16 +67,13 @@ function toggleDarkMode() {
     _set('darkModeIcon', isDark ? '🌙' : '☀');
     localStorage.setItem('theme', isDark ? 'light' : 'dark');
 }
-
 function initTheme() {
     const saved = localStorage.getItem('theme') || 'dark';
     document.documentElement.setAttribute('data-theme', saved);
     _set('darkModeIcon', saved === 'dark' ? '☀' : '🌙');
 }
 
-// ============================================================
-//  Log Drawer
-// ============================================================
+// ── Log Drawer ────────────────────────────────────────────────
 function openLogDrawer() {
     document.getElementById('logDrawer').classList.add('open');
     document.getElementById('drawerOverlay').classList.add('open');
@@ -111,21 +81,19 @@ function openLogDrawer() {
     if (sub) sub.textContent = currentUserRole === 'admin' ? 'All operator records' : 'Your records only';
     updateHistory(0);
 }
-
 function closeLogDrawer() {
     document.getElementById('logDrawer').classList.remove('open');
     document.getElementById('drawerOverlay').classList.remove('open');
 }
 
-// ============================================================
-//  Reagent Rename
-// ============================================================
+// ── Reagent Rename ────────────────────────────────────────────
 let renamingReagent = null;
-
 function openRenameModal(reagent) {
     renamingReagent = reagent;
     _set('renameModalTitle', `Rename Reagent ${reagent}`);
     document.getElementById('renameInput').value = reagentNames[reagent];
+    const errEl = document.getElementById('renameErrorMsg');
+    if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
     _renameModalInst = new bootstrap.Modal(document.getElementById('renameModal'));
     _renameModalInst.show();
 }
@@ -133,68 +101,85 @@ function openRenameModal(reagent) {
 function applyRename() {
     const val = document.getElementById('renameInput').value.trim();
     if (!val) return;
+    const oldName = reagentNames[renamingReagent];
+    const isA     = renamingReagent === 'A';
+    const ids     = isA
+        ? ['labelReagentA','summaryLabelA','summaryLabelA2','ovNameA','ovCompleteNameA','ovHaltedNameA']
+        : ['labelReagentB','summaryLabelB','summaryLabelB2','ovNameB','ovCompleteNameB','ovHaltedNameB'];
+
     reagentNames[renamingReagent] = val;
-    const isA = renamingReagent === 'A';
-    const ids = isA
-        ? ['labelReagentA','summaryLabelA','summaryLabelA2','vesselLabelA','monLegendA','pump1ReagentLabel']
-        : ['labelReagentB','summaryLabelB','summaryLabelB2','vesselLabelB','monLegendB','pump2ReagentLabel'];
     ids.forEach(id => _set(id, val));
     updateSummary();
-    if (_renameModalInst) { _renameModalInst.hide(); _renameModalInst = null; }
-    showStatus(`Reagent ${renamingReagent} renamed to "${val}".`, 'info');
+
+    const btn = document.getElementById('renameApplyBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+    fetch('/settings/reagent-names', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ a: reagentNames.A, b: reagentNames.B })
+    })
+    .then(async r => {
+        const data = await r.json();
+        if (!r.ok || data.status !== 'success') throw new Error(data.message || 'Save failed');
+        if (_renameModalInst) { _renameModalInst.hide(); _renameModalInst = null; }
+        showStatus(`Reagent ${renamingReagent} renamed to "${val}" and saved.`, 'success');
+        loadProtocols(); // refresh protocol list in case names changed
+    })
+    .catch(err => {
+        reagentNames[renamingReagent] = oldName;
+        ids.forEach(id => _set(id, oldName));
+        updateSummary();
+        const msgEl = document.getElementById('renameErrorMsg');
+        if (msgEl) { msgEl.textContent = `Could not save: ${err.message}`; msgEl.style.display = 'block'; }
+    })
+    .finally(() => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Apply'; }
+    });
 }
 
-// ============================================================
-//  Volume & Ratio Summary
-// ============================================================
+function applyReagentNames(nameA, nameB) {
+    if (nameA && nameA.trim()) {
+        reagentNames.A = nameA.trim();
+        ['labelReagentA','summaryLabelA','summaryLabelA2','ovNameA','ovCompleteNameA','ovHaltedNameA']
+            .forEach(id => _set(id, reagentNames.A));
+    }
+    if (nameB && nameB.trim()) {
+        reagentNames.B = nameB.trim();
+        ['labelReagentB','summaryLabelB','summaryLabelB2','ovNameB','ovCompleteNameB','ovHaltedNameB']
+            .forEach(id => _set(id, reagentNames.B));
+    }
+}
+
+// ── Summary ───────────────────────────────────────────────────
 function updateSummary() {
     const a = Number(document.getElementById('waterSlider').value);
     const b = Number(document.getElementById('syrupSlider').value);
     _set('summaryVolA',  `${a} ml`);
     _set('summaryVolB',  `${b} ml`);
     _set('summaryTotal', `${a + b} ml`);
-
     let ratio = '— : —';
     if (a > 0 && b > 0) {
         const gcd = (x, y) => y === 0 ? x : gcd(y, x % y);
-        const g   = gcd(a, b);
-        ratio     = `${a / g} : ${b / g}`;
+        ratio = `${a / gcd(a,b)} : ${b / gcd(a,b)}`;
     } else if (a > 0) ratio = 'A only';
     else if (b > 0)   ratio = 'B only';
     _set('summaryRatio', ratio);
-
     const total = a + b;
-    const segA  = document.getElementById('ratioSegA');
-    const segB  = document.getElementById('ratioSegB');
-    if (segA) segA.style.width = (total > 0 ? (a / total * 100).toFixed(1) : 0) + '%';
-    if (segB) segB.style.width = (total > 0 ? (b / total * 100).toFixed(1) : 0) + '%';
+    const segA = document.getElementById('ratioSegA');
+    const segB = document.getElementById('ratioSegB');
+    if (segA) segA.style.width = (total > 0 ? (a/total*100).toFixed(1) : 0) + '%';
+    if (segB) segB.style.width = (total > 0 ? (b/total*100).toFixed(1) : 0) + '%';
 }
 
-// ============================================================
-//  Sliders
-// ============================================================
+// ── Sliders ───────────────────────────────────────────────────
 function bindSlider(sliderId, valueId) {
-    const slider   = document.getElementById(sliderId);
-    const valueBox = document.getElementById(valueId);
-    if (!slider || !valueBox) return;
-    slider.addEventListener('input', () => {
-        valueBox.textContent = slider.value;
-        updateSummary();
-    });
+    const slider = document.getElementById(sliderId);
+    const box    = document.getElementById(valueId);
+    if (!slider || !box) return;
+    slider.addEventListener('input', () => { box.textContent = slider.value; updateSummary(); });
 }
 
-function setPreset(a, b) {
-    document.getElementById('waterSlider').value = a;
-    document.getElementById('syrupSlider').value = b;
-    _set('waterValue', a);
-    _set('syrupValue', b);
-    updateSummary();
-    showStatus(`Protocol loaded: ${reagentNames.A} ${a} ml | ${reagentNames.B} ${b} ml`, 'info');
-}
-
-// ============================================================
-//  Progress Bar (volume summary card)
-// ============================================================
+// ── Progress bar ──────────────────────────────────────────────
 function setProgressPct(pct) {
     const bar = document.getElementById('progressBar');
     const lbl = document.getElementById('progressPct');
@@ -203,7 +188,6 @@ function setProgressPct(pct) {
     if (lbl) lbl.textContent   = Math.round(pct) + '%';
     if (c)   c.style.display   = dispensing ? '' : 'none';
 }
-
 function resetProgressBar() {
     const bar = document.getElementById('progressBar');
     const lbl = document.getElementById('progressPct');
@@ -213,10 +197,8 @@ function resetProgressBar() {
     if (c)   c.style.display = 'none';
 }
 
-// ============================================================
-//  Confirmation Modal
-// ============================================================
-function showConfirmModal(reagentA, reagentB, onConfirm) {
+// ── Confirmation modal ────────────────────────────────────────
+function showConfirmModal(reagentA, reagentB, sequence, onConfirm) {
     _set('confirmLabelA', reagentNames.A);
     _set('confirmLabelB', reagentNames.B);
     _set('confirmVolA',   reagentA > 0 ? `${reagentA} ml` : 'SKIP');
@@ -224,27 +206,494 @@ function showConfirmModal(reagentA, reagentB, onConfirm) {
     _set('confirmTotal',  `${reagentA + reagentB} ml`);
     let ratio = '—';
     if (reagentA > 0 && reagentB > 0) {
-        const gcd = (x, y) => y === 0 ? x : gcd(y, x % y);
-        const g   = gcd(reagentA, reagentB);
-        ratio     = `${reagentA / g} : ${reagentB / g}`;
+        const gcd = (x,y) => y===0?x:gcd(y,x%y);
+        const g = gcd(reagentA, reagentB);
+        ratio = `${reagentA/g} : ${reagentB/g}`;
     } else ratio = reagentA > 0 ? 'A only' : 'B only';
-    _set('confirmRatio', ratio);
-    _set('confirmSequence',
-        reagentA > 0 && reagentB > 0 ? 'Pump 1 → 2s pause → Pump 2'
-        : reagentA > 0 ? 'Pump 1 only' : 'Pump 2 only');
-
+    _set('confirmRatio',    ratio);
+    _set('confirmSequence', sequence || (reagentA > 0 && reagentB > 0
+        ? 'Pump 1 → pause → Pump 2' : reagentA > 0 ? 'Pump 1 only' : 'Pump 2 only'));
     const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
     modal.show();
-    const btn    = document.getElementById('confirmDispenseBtn');
+    const btn = document.getElementById('confirmDispenseBtn');
     const newBtn = btn.cloneNode(true);
     btn.parentNode.replaceChild(newBtn, btn);
     newBtn.addEventListener('click', () => { modal.hide(); onConfirm(); });
 }
 
-// ============================================================
-//  Flask Fill — SVG <rect> driven by fraction 0→1
-//  viewBox: 0 0 100 150; flask base at y≈138, fillable height≈88
-// ============================================================
+// ── Protocols ─────────────────────────────────────────────────
+//
+//  Step data model (v2 — both reagents per step):
+//  {
+//    label:        string   — user-defined label e.g. "Buffer Mix"
+//    vol_a:        number   — ml for Reagent A (0 = skip)
+//    vol_b:        number   — ml for Reagent B (0 = skip)
+//    delay_after_s:number   — pause before next step
+//  }
+//
+function loadProtocols() {
+    fetch('/protocols')
+        .then(r => r.json())
+        .then(protocols => {
+            const body = document.getElementById('protocolsBody');
+            if (!protocols.length) {
+                body.innerHTML = '<div class="protocol-empty">No protocols saved. Click <strong>+ New</strong> to create one.</div>';
+                return;
+            }
+            body.innerHTML = '';
+            protocols.forEach(p => {
+                // Support both old single-pump format and new dual-reagent format
+                const steps = p.steps || [];
+                const totalA = steps.reduce((a,s) => a + (s.vol_a || (s.pump===1 ? s.volume_ml : 0) || 0), 0);
+                const totalB = steps.reduce((a,s) => a + (s.vol_b || (s.pump===2 ? s.volume_ml : 0) || 0), 0);
+                const hint   = [totalA>0?`${totalA} ml ${reagentNames.A}`:'', totalB>0?`${totalB} ml ${reagentNames.B}`:''].filter(Boolean).join(' + ');
+                const stepsHint = steps.length + (steps.length===1?' step':' steps');
+                const globalBadge = p.is_global ? '<span class="protocol-global-badge">global</span>' : '';
+                const canDelete   = currentUserRole==='admin' || p.created_by===document.getElementById('operatorName')?.textContent?.trim();
+                const delBtn      = canDelete ? `<button class="protocol-del-btn" onclick="deleteProtocol(${p.id})" title="Delete">✕</button>` : '';
+                const card = document.createElement('div');
+                card.className = 'protocol-card';
+                card.innerHTML = `
+                    <div class="protocol-card-main" onclick="runProtocol(${JSON.stringify(steps).replace(/"/g,'&quot;')})">
+                        <div class="protocol-name">${p.name}${globalBadge}</div>
+                        <div class="protocol-hint">${hint} · ${stepsHint}</div>
+                    </div>
+                    ${delBtn}`;
+                body.appendChild(card);
+            });
+        })
+        .catch(() => {
+            const body = document.getElementById('protocolsBody');
+            if (body) body.innerHTML = '<div class="protocol-empty">Failed to load protocols.</div>';
+        });
+}
+
+// Load protocol steps into activeProtocolSteps and update slider display
+function runProtocol(steps) {
+    if (dispensing) { showStatus('Cannot change protocol while dispensing.', 'danger'); return; }
+    if (!Array.isArray(steps)) {
+        try { steps = JSON.parse(steps); } catch(_) { return; }
+    }
+    // Normalise legacy single-pump steps into new dual format
+    steps = steps.map(s => s.vol_a !== undefined ? s : {
+        label: `Pump ${s.pump}`,
+        vol_a: s.pump===1 ? (s.volume_ml||0) : 0,
+        vol_b: s.pump===2 ? (s.volume_ml||0) : 0,
+        delay_after_s: s.delay_after_s || 0
+    });
+    activeProtocolSteps = steps;
+    const totalA = steps.reduce((a,s)=>a+(s.vol_a||0),0);
+    const totalB = steps.reduce((a,s)=>a+(s.vol_b||0),0);
+    document.getElementById('waterSlider').value = Math.min(totalA, 1000);
+    document.getElementById('syrupSlider').value = Math.min(totalB, 1000);
+    _set('waterValue', Math.min(totalA, 1000));
+    _set('syrupValue', Math.min(totalB, 1000));
+    updateSummary();
+    const desc = steps.map((s,i) => {
+        const parts = [];
+        if (s.vol_a>0) parts.push(`${reagentNames.A}: ${s.vol_a} ml`);
+        if (s.vol_b>0) parts.push(`${reagentNames.B}: ${s.vol_b} ml`);
+        const label = s.label ? `"${s.label}"` : `Step ${i+1}`;
+        return `${label} [${parts.join(' + ')}]`;
+    }).join(' → ');
+    showStatus(`Protocol loaded: ${desc}`, 'info');
+}
+
+// ── Protocol builder ──────────────────────────────────────────
+// Each step card: label input, vol_a, vol_b, delay_after_s.
+// Cards are draggable for reordering.
+
+let protocolStepCount = 0;
+let dragSrc = null;  // currently dragged step element
+
+function openProtocolBuilderModal() {
+    document.getElementById('protocolName').value = '';
+    document.getElementById('protocolStepsContainer').innerHTML = '';
+    const msgEl = document.getElementById('protocolBuilderMsg');
+    if (msgEl) { msgEl.textContent = ''; msgEl.style.color = 'var(--text-3)'; }
+    protocolStepCount = 0;
+    addProtocolStep();
+    if (currentUserRole === 'admin') {
+        const wrap = document.getElementById('globalProtocolWrap');
+        if (wrap) wrap.style.display = '';
+        const chk = document.getElementById('protocolIsGlobal');
+        if (chk) chk.checked = false;
+    }
+    new bootstrap.Modal(document.getElementById('protocolBuilderModal')).show();
+}
+
+function addProtocolStep() {
+    protocolStepCount++;
+    const idx  = protocolStepCount;
+    const wrap = document.getElementById('protocolStepsContainer');
+    const card = document.createElement('div');
+    card.className   = 'pstep-card';
+    card.id          = `psc-${idx}`;
+    card.draggable   = true;
+    card.innerHTML   = `
+        <div class="pstep-drag-handle" title="Drag to reorder">⠿</div>
+        <div class="pstep-body">
+            <div class="pstep-row pstep-label-row">
+                <label class="pstep-field-label">Step label / note</label>
+                <input type="text" class="dash-input pstep-label-input" id="sp-label-${idx}"
+                       maxlength="40" placeholder="e.g. Buffer Mix, Rinse, Main dispense…">
+            </div>
+            <div class="pstep-row pstep-vols-row">
+                <div class="pstep-vol-group">
+                    <label class="pstep-field-label">${reagentNames.A} (ml)</label>
+                    <input type="number" class="dash-input pstep-vol" id="sp-vola-${idx}"
+                           min="0" max="1000" value="100" placeholder="0 = skip">
+                </div>
+                <div class="pstep-vol-group">
+                    <label class="pstep-field-label">${reagentNames.B} (ml)</label>
+                    <input type="number" class="dash-input pstep-vol" id="sp-volb-${idx}"
+                           min="0" max="1000" value="0" placeholder="0 = skip">
+                </div>
+                <div class="pstep-vol-group">
+                    <label class="pstep-field-label">Delay after (s)</label>
+                    <input type="number" class="dash-input pstep-vol" id="sp-delay-${idx}"
+                           min="0" max="300" value="2" placeholder="s">
+                </div>
+            </div>
+        </div>
+        <button class="pstep-remove-btn" onclick="removeProtocolStep(${idx})" title="Remove step">✕</button>
+        <span class="pstep-num" id="spnum-${idx}">1</span>`;
+
+    // Drag-and-drop handlers
+    card.addEventListener('dragstart', e => {
+        dragSrc = card;
+        card.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        document.querySelectorAll('.pstep-card').forEach(c => c.classList.remove('drag-over'));
+        dragSrc = null;
+        renumberSteps();
+    });
+    card.addEventListener('dragover', e => {
+        e.preventDefault();
+        if (dragSrc && dragSrc !== card) {
+            document.querySelectorAll('.pstep-card').forEach(c => c.classList.remove('drag-over'));
+            card.classList.add('drag-over');
+        }
+    });
+    card.addEventListener('drop', e => {
+        e.preventDefault();
+        if (dragSrc && dragSrc !== card) {
+            const wrap   = document.getElementById('protocolStepsContainer');
+            const cards  = [...wrap.querySelectorAll('.pstep-card')];
+            const srcIdx = cards.indexOf(dragSrc);
+            const tgtIdx = cards.indexOf(card);
+            if (srcIdx < tgtIdx) wrap.insertBefore(dragSrc, card.nextSibling);
+            else                  wrap.insertBefore(dragSrc, card);
+        }
+        card.classList.remove('drag-over');
+    });
+
+    wrap.appendChild(card);
+    renumberSteps();
+}
+
+function removeProtocolStep(idx) {
+    const el = document.getElementById(`psc-${idx}`);
+    if (el) { el.remove(); renumberSteps(); }
+}
+
+function renumberSteps() {
+    document.querySelectorAll('#protocolStepsContainer .pstep-card').forEach((c,i) => {
+        const badge = c.querySelector('.pstep-num');
+        if (badge) badge.textContent = i+1;
+    });
+}
+
+function saveProtocol() {
+    const name  = document.getElementById('protocolName').value.trim();
+    const msgEl = document.getElementById('protocolBuilderMsg');
+    if (!name) { msgEl.textContent = 'Protocol name is required.'; msgEl.style.color='var(--danger)'; return; }
+
+    const cards = document.querySelectorAll('#protocolStepsContainer .pstep-card');
+    const steps = [];
+    let valid   = true;
+    cards.forEach(card => {
+        const idx   = card.id.replace('psc-','');
+        const label = document.getElementById(`sp-label-${idx}`)?.value.trim() || '';
+        const volA  = parseFloat(document.getElementById(`sp-vola-${idx}`)?.value) || 0;
+        const volB  = parseFloat(document.getElementById(`sp-volb-${idx}`)?.value) || 0;
+        const delay = parseFloat(document.getElementById(`sp-delay-${idx}`)?.value) || 0;
+        if (volA < 0 || volB < 0) { valid = false; return; }
+        if (volA === 0 && volB === 0) { valid = false; return; }
+        steps.push({ label, vol_a: volA, vol_b: volB, delay_after_s: delay });
+    });
+    if (!steps.length) { msgEl.textContent='Add at least one step.'; msgEl.style.color='var(--danger)'; return; }
+    if (!valid) { msgEl.textContent='Each step needs at least one non-zero volume.'; msgEl.style.color='var(--danger)'; return; }
+
+    const isGlobal = document.getElementById('protocolIsGlobal')?.checked || false;
+    msgEl.textContent = 'Saving…'; msgEl.style.color = 'var(--text-3)';
+
+    fetch('/protocols', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, steps, is_global: isGlobal })
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.status !== 'success') throw new Error(d.message);
+        bootstrap.Modal.getInstance(document.getElementById('protocolBuilderModal'))?.hide();
+        loadProtocols();
+        showStatus(`Protocol "${name}" saved.`, 'success');
+    })
+    .catch(err => { msgEl.textContent = err.message; msgEl.style.color = 'var(--danger)'; });
+}
+
+function deleteProtocol(id) {
+    if (!confirm('Delete this protocol?')) return;
+    fetch(`/protocols/${id}`, { method:'DELETE' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.status==='success') { loadProtocols(); showStatus('Protocol deleted.','info'); }
+            else showStatus(d.message,'danger');
+        });
+}
+
+// ── Dispense ──────────────────────────────────────────────────
+async function startDispensing() {
+    const dot = document.getElementById('statusDot');
+    if (!dot || !dot.classList.contains('connected')) {
+        showStatus('Cannot initiate: Controller is disconnected.', 'danger');
+        return;
+    }
+    if (dispensing) return;
+
+    // Build steps from active protocol OR from sliders (single-step quick dispense)
+    let steps;
+    if (activeProtocolSteps && activeProtocolSteps.length > 0) {
+        steps = activeProtocolSteps;
+    } else {
+        const reagentA = Number(document.getElementById('waterSlider').value);
+        const reagentB = Number(document.getElementById('syrupSlider').value);
+        if (reagentA === 0 && reagentB === 0) {
+            showStatus('[ALERT] Both reagent volumes are zero.', 'danger'); return;
+        }
+        // Single step covering both reagents sequentially
+        steps = [{ label: 'Manual dispense', vol_a: reagentA, vol_b: reagentB, delay_after_s: 0 }];
+    }
+
+    const totalA   = steps.reduce((a,s)=>a+(s.vol_a||0), 0);
+    const totalB   = steps.reduce((a,s)=>a+(s.vol_b||0), 0);
+    const seqLabel = steps.map((s,i) => {
+        const parts = [];
+        if (s.vol_a>0) parts.push(`${reagentNames.A} ${s.vol_a} ml`);
+        if (s.vol_b>0) parts.push(`${reagentNames.B} ${s.vol_b} ml`);
+        return `Step ${i+1}${s.label?` "${s.label}"`:''}: ${parts.join(' + ')}`;
+    }).join(' → ');
+
+    showConfirmModal(totalA, totalB, seqLabel, () => executeMultiStep(steps));
+}
+
+async function executeMultiStep(steps) {
+    dispensing = true;
+    const btn = document.getElementById('dispenseBtn');
+    if (btn) btn.disabled = true;
+    _set('dispenseBtnText', '⏳ Dispensing...');
+
+    const totalA = steps.reduce((a,s)=>a+(s.vol_a||0), 0);
+    const totalB = steps.reduce((a,s)=>a+(s.vol_b||0), 0);
+    const protoName = activeProtocolSteps ? (document.querySelector('.protocol-card .protocol-name')?.textContent?.trim()||null) : null;
+    initMonitorUI(totalA, totalB);
+    startElapsedTimer();
+    overlayStartDispensing(steps);
+
+    try {
+        for (let i = 0; i < steps.length; i++) {
+            if (!dispensing) break;
+            const step = steps[i];
+            const stepLabel = step.label || `Step ${i+1}`;
+            _set('pillStep', `${i+1} / ${steps.length}`);
+            _set('pillPhase', stepLabel);
+            overlaySetStep(i+1, steps.length, stepLabel,
+                [step.vol_a>0?(reagentNames.A+' '+step.vol_a+'ml'):'',
+                 step.vol_b>0?(reagentNames.B+' '+step.vol_b+'ml'):''].filter(Boolean).join(' then '));
+
+            // Within each step: run Reagent A first (if non-zero), then Reagent B
+            if (step.vol_a > 0) {
+                if (!dispensing) break;
+                await runPumpStage(1, reagentNames.A, step.vol_a,
+                    { reagent_a: step.vol_a, reagent_b: 0 });
+            }
+            if (step.vol_b > 0 && dispensing) {
+                // Brief 1s gap between A and B within the same step (hardware settling)
+                if (step.vol_a > 0) {
+                    showStatus(`[STEP ${i+1}]  ${reagentNames.A} done. Starting ${reagentNames.B} in 1s…`, 'info');
+                    resetProgressBar();
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                if (!dispensing) break;
+                await runPumpStage(2, reagentNames.B, step.vol_b,
+                    { reagent_a: 0, reagent_b: step.vol_b });
+            }
+
+            if (!dispensing) break;
+
+            // Inter-step delay (not after the last step)
+            if (step.delay_after_s > 0 && i < steps.length - 1) {
+                showStatus(`[PAUSE]  Step ${i+1} "${stepLabel}" complete. Next step in ${step.delay_after_s}s…`, 'info');
+                _set('pillPhase', `${step.delay_after_s}s pause`);
+                resetProgressBar();
+                await new Promise(r => setTimeout(r, step.delay_after_s * 1000));
+            }
+        }
+        if (dispensing) await finishDispense(totalA, totalB);
+    } catch (err) {
+        console.error('[executeMultiStep]', err);
+        showStatus(`Error: ${err.message}`, 'danger');
+        resetDispenseUI();
+    }
+}
+
+// ── Dispensing Overlay ────────────────────────────────────────
+//  Three states: 'dispensing' | 'complete' | 'halted'
+
+let _overlayElapsedTimer = null;
+let _overlayStartTime    = null;
+let _overlayCurrentStep  = 0;
+let _overlayTotalSteps   = 1;
+let _overlayDispensedA   = 0;
+let _overlayDispensedB   = 0;
+
+function showDispenseOverlay() {
+    const el = document.getElementById('dispenseOverlay');
+    if (el) el.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+function hideDispenseOverlay() {
+    const el = document.getElementById('dispenseOverlay');
+    if (el) el.style.display = 'none';
+    document.body.style.overflow = '';
+    if (_overlayElapsedTimer) { clearInterval(_overlayElapsedTimer); _overlayElapsedTimer = null; }
+}
+function overlayGoToDashboard() {
+    hideDispenseOverlay();
+    updateHistory();
+    loadInventory(false);
+}
+function overlayViewHistory() {
+    hideDispenseOverlay();
+    openLogDrawer();
+}
+
+function overlayStartDispensing(steps) {
+    _overlayStartTime   = Date.now();
+    _overlayTotalSteps  = steps.length;
+    _overlayCurrentStep = 0;
+    _overlayDispensedA  = 0;
+    _overlayDispensedB  = 0;
+    // Reset flask fills
+    _ovSetFlask('ovFlaskFillA', 0);
+    _ovSetFlask('ovFlaskFillB', 0);
+    _set('ovVolA','0.0 mL'); _set('ovVolB','0.0 mL');
+    _set('ovTargetA','/ — mL'); _set('ovTargetB','/ — mL');
+    const bA = document.getElementById('ovBadgeA'); if(bA){bA.className='ov-badge-wait';bA.textContent='Waiting';}
+    const bB = document.getElementById('ovBadgeB'); if(bB){bB.className='ov-badge-wait';bB.textContent='Waiting';}
+    const bar = document.getElementById('ovProgFill'); if(bar) bar.style.width='0%';
+    _set('ovProgPct','0%'); _set('ovFlowA','— mL/s'); _set('ovFlowB','— mL/s');
+    _ovSetState('dispensing');
+    showDispenseOverlay();
+    if (_overlayElapsedTimer) clearInterval(_overlayElapsedTimer);
+    _overlayElapsedTimer = setInterval(() => {
+        if (!_overlayStartTime) return;
+        const s  = Math.floor((Date.now()-_overlayStartTime)/1000);
+        _set('ovElapsed', String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'));
+    }, 500);
+}
+
+function overlaySetStep(idx, total, label, noteText) {
+    _overlayCurrentStep = idx;
+    _set('ovStepBadge', 'Step '+idx+' of '+total);
+    _set('ovStepLabel', label||('Step '+idx));
+    _set('ovStepNote',  noteText||'');
+    const b = document.getElementById('ovStepBadge');
+    if (b) b.className = 'ov-step-badge';
+}
+
+function overlayUpdatePoll(pumpNum, dispensed, target, pct, statusText) {
+    if (pumpNum===1) {
+        _overlayDispensedA = dispensed;
+        _ovSetFlask('ovFlaskFillA', target>0 ? dispensed/target : 0);
+        _set('ovVolA', dispensed.toFixed(1)+' mL');
+        _set('ovTargetA', '/ '+(target>0?target.toFixed(0):'—')+' mL');
+        const bA=document.getElementById('ovBadgeA'); if(bA){bA.className='ov-badge-run';bA.textContent='Running';}
+        const bB=document.getElementById('ovBadgeB'); if(bB){bB.className='ov-badge-wait';bB.textContent='Waiting';}
+        const bar=document.getElementById('ovProgFill'); if(bar){bar.style.width=Math.min(pct,100).toFixed(1)+'%';bar.style.background='#58a6ff';}
+        _set('ovProgPct', Math.min(pct,100).toFixed(1)+'%');
+        _set('ovProgLabel', reagentNames.A+' progress');
+    } else {
+        _overlayDispensedB = dispensed;
+        _ovSetFlask('ovFlaskFillB', target>0 ? dispensed/target : 0);
+        _set('ovVolB', dispensed.toFixed(1)+' mL');
+        _set('ovTargetB', '/ '+(target>0?target.toFixed(0):'—')+' mL');
+        const bB=document.getElementById('ovBadgeB'); if(bB){bB.className='ov-badge-run';bB.textContent='Running';}
+        const bA=document.getElementById('ovBadgeA'); if(bA){bA.className='ov-badge-done';bA.textContent='Done';}
+        const bar=document.getElementById('ovProgFill'); if(bar){bar.style.width=Math.min(pct,100).toFixed(1)+'%';bar.style.background='#3fb950';}
+        _set('ovProgPct', Math.min(pct,100).toFixed(1)+'%');
+        _set('ovProgLabel', reagentNames.B+' progress');
+    }
+    if (statusText) _set('ovStatusMsg', statusText);
+}
+
+function overlayShowComplete(totalA, totalB, protocolName) {
+    if (_overlayElapsedTimer) { clearInterval(_overlayElapsedTimer); _overlayElapsedTimer = null; }
+    _ovSetFlask('ovFlaskFillA', totalA>0?1:0);
+    _ovSetFlask('ovFlaskFillB', totalB>0?1:0);
+    _set('ovCompleteNameA', reagentNames.A);
+    _set('ovCompleteNameB', reagentNames.B);
+    _set('ovCompleteVolA',  totalA.toFixed(1)+' mL');
+    _set('ovCompleteVolB',  totalB.toFixed(1)+' mL');
+    _set('ovCompleteTotal', (totalA+totalB).toFixed(1)+' mL');
+    _set('ovCompleteProto', protocolName||'Manual dispense');
+    if (_overlayStartTime) {
+        const s=Math.floor((Date.now()-_overlayStartTime)/1000);
+        _set('ovCompleteElapsed', String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'));
+    }
+    const b=document.getElementById('ovStepBadge'); if(b){b.className='ov-step-badge-done';b.textContent='Complete';}
+    _ovSetState('complete');
+}
+
+function overlayShowHalted(dispensedA, dispensedB) {
+    if (_overlayElapsedTimer) { clearInterval(_overlayElapsedTimer); _overlayElapsedTimer = null; }
+    _set('ovHaltedNameA',  reagentNames.A);
+    _set('ovHaltedNameB',  reagentNames.B);
+    _set('ovHaltedVolA',   dispensedA.toFixed(1)+' mL');
+    _set('ovHaltedVolB',   dispensedB.toFixed(1)+' mL');
+    _set('ovHaltedTotal',  (dispensedA+dispensedB).toFixed(1)+' mL');
+    _set('ovHaltedStep',   'Halted at step '+_overlayCurrentStep+' of '+_overlayTotalSteps);
+    const b=document.getElementById('ovStepBadge'); if(b){b.className='ov-step-badge-halt';b.textContent='Halted';}
+    _ovSetState('halted');
+}
+
+function _ovSetFlask(rectId, fraction) {
+    const rect = document.getElementById(rectId);
+    if (!rect) return;
+    const f = Math.max(0, Math.min(1, isFinite(fraction)?fraction:0));
+    const h = f*88;
+    rect.setAttribute('y', String(138-h));
+    rect.setAttribute('height', String(h+2));
+}
+
+function _ovSetState(state) {
+    ['ovStateDispensing','ovStateComplete','ovStateHalted'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    const show = state==='dispensing'?'ovStateDispensing':state==='complete'?'ovStateComplete':'ovStateHalted';
+    const el = document.getElementById(show); if(el) el.style.display='';
+    const nav = document.getElementById('ovNav');
+    if (nav) {
+        nav.style.background  = state==='halted'?'rgba(218,54,51,0.12)':'var(--surface-2)';
+        nav.style.borderBottomColor = state==='halted'?'rgba(248,81,73,0.3)':'var(--border)';
+    }
+}
+
+// ── Flask fill / drip ─────────────────────────────────────────
 const FLASK_BOTTOM_Y = 138;
 const FLASK_FILL_H   = 88;
 
@@ -256,29 +705,24 @@ function setFlaskFill(id, fraction) {
     rect.setAttribute('y',      String(FLASK_BOTTOM_Y - h));
     rect.setAttribute('height', String(h + 2));
 }
-
 function setDrip(id, active) {
     const el = document.getElementById(id);
     if (!el) return;
     if (active) {
-        el.classList.remove('drip-hidden');
-        el.classList.add('drip-active');
-        el.setAttribute('opacity', '0.9');
+        el.classList.remove('drip-hidden'); el.classList.add('drip-active');
+        el.setAttribute('opacity','0.9');
     } else {
-        el.classList.add('drip-hidden');
-        el.classList.remove('drip-active');
-        el.setAttribute('opacity', '0');
+        el.classList.add('drip-hidden'); el.classList.remove('drip-active');
+        el.setAttribute('opacity','0');
     }
 }
-
 function setMonBadge(id, state) {
-    const el = document.getElementById(id);
+    const el  = document.getElementById(id);
     if (!el) return;
-    const map = { idle:'badge-idle', dispensing:'badge-dispensing', completed:'badge-completed', halted:'badge-halted' };
+    const map = {idle:'badge-idle',dispensing:'badge-dispensing',completed:'badge-completed',halted:'badge-halted'};
     el.className   = 'mon-badge ' + (map[state] || 'badge-idle');
     el.textContent = state.charAt(0).toUpperCase() + state.slice(1);
 }
-
 function setPumpCardActive(num, active) {
     const card  = document.getElementById(`pumpCard${num}`);
     const state = document.getElementById(`pumpState${num}`);
@@ -295,64 +739,34 @@ function setPumpCardActive(num, active) {
     }
 }
 
-// ============================================================
-//  Combined monitor progress bar
-//  A-segment occupies targetA/(targetA+targetB) of total width,
-//  B-segment occupies the rest. Each fills proportionally.
-// ============================================================
-function updateMonitorSegments(dispensedA, targetA, dispensedB, targetB) {
-    const totalTarget = (targetA || 0) + (targetB || 0);
-    if (totalTarget <= 0) return;
-
-    const fracA  = targetA > 0 ? Math.min((dispensedA || 0) / targetA, 1) : (targetA === 0 ? 1 : 0);
-    const fracB  = targetB > 0 ? Math.min((dispensedB || 0) / targetB, 1) : 0;
-    const shareA = targetA / totalTarget;
-    const shareB = targetB / totalTarget;
-
+function updateMonitorSegments(dA, tA, dB, tB) {
+    const total = (tA||0)+(tB||0); if (total<=0) return;
+    const fA = tA>0 ? Math.min((dA||0)/tA,1) : 1;
+    const fB = tB>0 ? Math.min((dB||0)/tB,1) : 0;
+    const sA = tA/total; const sB = tB/total;
     const elA = document.getElementById('monSegA');
     const elB = document.getElementById('monSegB');
-
-    if (elA) {
-        elA.style.width = (fracA * shareA * 100).toFixed(2) + '%';
-        if (targetB > 0) elA.classList.add('has-b');
-        else             elA.classList.remove('has-b');
-    }
-    if (elB) elB.style.width = (fracB * shareB * 100).toFixed(2) + '%';
+    if (elA) { elA.style.width=(fA*sA*100).toFixed(2)+'%'; if (tB>0) elA.classList.add('has-b'); else elA.classList.remove('has-b'); }
+    if (elB)   elB.style.width=(fB*sB*100).toFixed(2)+'%';
 }
 
-// ============================================================
-//  Elapsed Timer — lightweight client-side display
-// ============================================================
+// ── Elapsed timer ─────────────────────────────────────────────
 function startElapsedTimer() {
     stopElapsedTimer();
     dispenseStartTime = Date.now();
     elapsedTimer = setInterval(() => {
         if (!dispenseStartTime) return;
-        _set('pillElapsed', ((Date.now() - dispenseStartTime) / 1000).toFixed(1) + 's');
+        _set('pillElapsed', ((Date.now()-dispenseStartTime)/1000).toFixed(1)+'s');
     }, 200);
 }
 
-// ============================================================
-//  UNIFIED PROGRESS POLL  ← the heart of v3
-//
-//  Replaces both the old monTick simulation AND the old
-//  per-stage progressInterval. One function drives everything.
-//
-//  /progress returns:
-//   { active, dispensed_a, dispensed_b, target_a, target_b, pct_a, pct_b }
-//
-//  Stage completion:
-//   prog.active === false  — ESP32 stopped pump and called /complete,
-//                            Flask set dispense_session active=False
-//   pct >= 100             — fallback if /complete arrived before last poll
-// ============================================================
+// ── Unified progress poll ─────────────────────────────────────
 function startProgressPoll(pumpNum, reagentLabel, volume) {
     stopProgressPoll();
-
     return new Promise((resolve, reject) => {
-        let pollCount          = 0;
-        let staleWarningActive = false;   // true = warning banner is pinned; suppress normal status
-        const STALE_AFTER_POLLS = 20;     // 20 × 500ms = 10s of zero progress → warn
+        let pollCount = 0;
+        let staleWarningActive = false;
+        const STALE_AFTER_POLLS = 20;
 
         progressInterval = setInterval(async () => {
             if (!dispensing) { stopProgressPoll(); return; }
@@ -361,426 +775,221 @@ function startProgressPoll(pumpNum, reagentLabel, volume) {
                 const prog = await res.json();
                 pollCount++;
 
-                // ─── Pick values for the current pump ───
-                const dispensed = pumpNum === 1 ? (prog.dispensed_a || 0) : (prog.dispensed_b || 0);
-                const target    = pumpNum === 1 ? (prog.target_a    || 0) : (prog.target_b    || 0);
-                const pct       = pumpNum === 1 ? (prog.pct_a       || 0) : (prog.pct_b       || 0);
+                const dispensed = pumpNum===1 ? (prog.dispensed_a||0) : (prog.dispensed_b||0);
+                const target    = pumpNum===1 ? (prog.target_a   ||0) : (prog.target_b   ||0);
+                const pct       = pumpNum===1 ? (prog.pct_a      ||0) : (prog.pct_b      ||0);
 
-                // ─── Stale sensor warning ───
-                // Shown after 10s of zero progress (sensor likely not connected).
-                // Once active, normal status updates are suppressed so the warning stays visible.
-                // Clears automatically if real flow data starts arriving.
-                if (!staleWarningActive && pollCount >= STALE_AFTER_POLLS && dispensed === 0) {
+                if (!staleWarningActive && pollCount>=STALE_AFTER_POLLS && dispensed===0) {
                     staleWarningActive = true;
-                    showSensorWarning(STALE_AFTER_POLLS / 2);
+                    showSensorWarning(STALE_AFTER_POLLS/2);
                 }
-                if (staleWarningActive && dispensed > 0) {
+                if (staleWarningActive && dispensed>0) {
                     staleWarningActive = false;
                     hideSensorWarning();
                 }
 
-                const volId    = pumpNum === 1 ? 'monVolA'    : 'monVolB';
-                const tgtId    = pumpNum === 1 ? 'monTargetA' : 'monTargetB';
-                const fillId   = pumpNum === 1 ? 'flaskFillA' : 'flaskFillB';
-                const dripId   = pumpNum === 1 ? 'dripA'      : 'dripB';
-                const msgId    = pumpNum === 1 ? 'monMsgA'    : 'monMsgB';
-                const badgeId  = pumpNum === 1 ? 'monBadgeA'  : 'monBadgeB';
-                const flowId   = pumpNum === 1 ? 'pillFlowA'  : 'pillFlowB';
+                const volId  = pumpNum===1 ? 'monVolA'    : 'monVolB';
+                const tgtId  = pumpNum===1 ? 'monTargetA' : 'monTargetB';
+                const fillId = pumpNum===1 ? 'flaskFillA' : 'flaskFillB';
+                const dripId = pumpNum===1 ? 'dripA'      : 'dripB';
+                const msgId  = pumpNum===1 ? 'monMsgA'    : 'monMsgB';
+                const badgeId= pumpNum===1 ? 'monBadgeA'  : 'monBadgeB';
+                const flowId = pumpNum===1 ? 'pillFlowA'  : 'pillFlowB';
+                const displayTarget = target>0 ? target : volume;
 
-                // ─── Update vol display ───
-                _set(volId, dispensed.toFixed(2) + ' mL');
-                _set(tgtId, '/ ' + (target > 0 ? target.toFixed(1) : volume.toFixed(1)) + ' mL');
-
-                // ─── Flask fill (real fraction) ───
-                const displayTarget = target > 0 ? target : volume;
-                setFlaskFill(fillId, displayTarget > 0 ? dispensed / displayTarget : 0);
-
-                // ─── Drip only while actively dispensing ───
+                _set(volId, dispensed.toFixed(2)+' mL');
+                _set(tgtId, '/ '+(displayTarget>0?displayTarget.toFixed(1):'—')+' mL');
+                setFlaskFill(fillId, displayTarget>0 ? dispensed/displayTarget : 0);
                 setDrip(dripId, true);
-
-                // ─── Top progress bar ───
                 setProgressPct(Math.min(pct, 100));
+                updateMonitorSegments(prog.dispensed_a||0, prog.target_a||0, prog.dispensed_b||0, prog.target_b||0);
 
-                // ─── Combined monitor bar ───
-                updateMonitorSegments(
-                    prog.dispensed_a || 0, prog.target_a || 0,
-                    prog.dispensed_b || 0, prog.target_b || 0
-                );
-
-                // ─── Flow rate pill (approximate from elapsed) ───
-                if (dispenseStartTime && dispensed > 0) {
-                    const elapsed = (Date.now() - dispenseStartTime) / 1000;
-                    _set(flowId, (dispensed / elapsed).toFixed(2) + ' mL/s');
+                if (dispenseStartTime && dispensed>0) {
+                    const elapsed = (Date.now()-dispenseStartTime)/1000;
+                    _set(flowId, (dispensed/elapsed).toFixed(2)+' mL/s');
                 }
 
-                // ─── Status text — suppressed while sensor warning banner is pinned ───
                 if (!staleWarningActive) {
-                    showStatus(
-                        `[PUMP ${pumpNum}  ${reagentLabel}]  ${dispensed.toFixed(2)} / ${displayTarget.toFixed(1)} mL  (${pct.toFixed(1)}%)`,
-                        'warning'
-                    );
+                    const statusTxt = `[PUMP ${pumpNum}  ${reagentLabel}]  ${dispensed.toFixed(2)} / ${displayTarget.toFixed(1)} mL  (${pct.toFixed(1)}%)`;
+                    showStatus(statusTxt, 'warning');
+                    overlayUpdatePoll(pumpNum, dispensed, displayTarget, pct, statusTxt);
                 }
 
-                // ─── Completion check ───
-                const isDone = !prog.active || pct >= 100;
-                if (isDone) {
+                if (!prog.active || pct>=100) {
                     stopProgressPoll();
                     clearSensorWarning();
-
-                    // Lock UI at final state
-                    const finalVol = displayTarget;
                     setFlaskFill(fillId, 1);
-                    setDrip(dripId, false);               // ← STOP drip animation
-                    _set(volId, finalVol.toFixed(2) + ' mL');
+                    setDrip(dripId, false);
+                    _set(volId, displayTarget.toFixed(2)+' mL');
                     setProgressPct(100);
                     setPumpCardActive(pumpNum, false);
                     setMonBadge(badgeId, 'completed');
-                    _set(msgId, `Complete — ${finalVol.toFixed(2)} mL`);
+                    _set(msgId, `Complete — ${displayTarget.toFixed(2)} mL`);
                     _set(flowId, '0.00 mL/s');
-
-                    // Final combined bar update
                     updateMonitorSegments(
-                        pumpNum === 1 ? (prog.target_a || volume) : (prog.dispensed_a || 0),
-                        prog.target_a || (pumpNum === 1 ? volume : 0),
-                        pumpNum === 2 ? (prog.target_b || volume) : (prog.dispensed_b || 0),
-                        prog.target_b || (pumpNum === 2 ? volume : 0)
-                    );
-
-                    showStatus(
-                        `[PUMP ${pumpNum} DONE]  ${reagentLabel}: ${finalVol.toFixed(2)} mL dispensed`,
-                        'success'
-                    );
-                    resolve({ dispensed: finalVol, target: displayTarget });
+                        pumpNum===1?(prog.target_a||volume):(prog.dispensed_a||0), prog.target_a||(pumpNum===1?volume:0),
+                        pumpNum===2?(prog.target_b||volume):(prog.dispensed_b||0), prog.target_b||(pumpNum===2?volume:0));
+                    showStatus(`[PUMP ${pumpNum} DONE]  ${reagentLabel}: ${displayTarget.toFixed(2)} mL dispensed`, 'success');
+                    resolve({ dispensed: displayTarget, target: displayTarget });
                 }
-
-            } catch (e) {
-                console.warn('[progress poll]', e.message);
-                // Don't reject on a single failed poll — keep retrying
-            }
+            } catch(e) { console.warn('[progress poll]', e.message); }
         }, 500);
     });
 }
 
-// ============================================================
-//  Run a Single Pump Stage
-// ============================================================
+// ── Run single pump stage ─────────────────────────────────────
 function runPumpStage(pumpNum, reagentLabel, volume, params) {
     return new Promise((resolve, reject) => {
-        // Arm monitor UI
         setPumpCardActive(pumpNum, true);
-        setMonBadge(pumpNum === 1 ? 'monBadgeA' : 'monBadgeB', 'dispensing');
-        _set(pumpNum === 1 ? 'monMsgA' : 'monMsgB', `Dispensing ${reagentLabel}…`);
-        setDrip(pumpNum === 1 ? 'dripA' : 'dripB', true);
-        _set('pillPhase',    `Pump ${pumpNum} — ${reagentLabel}`);
+        setMonBadge(pumpNum===1?'monBadgeA':'monBadgeB', 'dispensing');
+        _set(pumpNum===1?'monMsgA':'monMsgB', `Dispensing ${reagentLabel}…`);
+        setDrip(pumpNum===1?'dripA':'dripB', true);
+        _set('pillPhase', `Pump ${pumpNum} — ${reagentLabel}`);
         _set('pillSequence', 'In progress');
-
-        // Show progress bar
         const c = document.getElementById('progressContainer');
         if (c) c.style.display = '';
         setProgressPct(0);
 
-        // Send /dispense to Flask → ESP32
         fetch('/dispense', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify(params)
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(params)
         })
         .then(async res => {
             const text = await res.text();
             let data;
             try { data = JSON.parse(text); }
-            catch (_) {
-                if (res.status === 401 || res.redirected) {
-                    showSessionExpired();
-                    throw new Error('Session expired.');
-                }
-                throw new Error('Unexpected server response. Check Flask logs.');
+            catch(_) {
+                if (res.status===401||res.redirected) { showSessionExpired(); throw new Error('Session expired.'); }
+                throw new Error('Unexpected server response.');
             }
-            if (!res.ok) throw new Error(data.message || `Server error (${res.status})`);
-            if (data.status !== 'started') throw new Error(data.message || 'Failed to start pump');
+            if (!res.ok) throw new Error(data.message||`Server error (${res.status})`);
+            if (data.status!=='started') throw new Error(data.message||'Failed to start pump');
             return data;
         })
         .then(() => {
             showStatus(`[PUMP ${pumpNum} ACTIVE]  Dispensing ${reagentLabel}: ${volume} mL`, 'warning');
-            // Hand off to unified poll — poll drives all UI from here
-            startProgressPoll(pumpNum, reagentLabel, volume)
-                .then(resolve)
-                .catch(reject);
+            startProgressPoll(pumpNum, reagentLabel, volume).then(resolve).catch(reject);
         })
         .catch(err => {
             setPumpCardActive(pumpNum, false);
-            setDrip(pumpNum === 1 ? 'dripA' : 'dripB', false);
+            setDrip(pumpNum===1?'dripA':'dripB', false);
             reject(err);
         });
     });
 }
 
-// ============================================================
-//  Main Dispense Sequence
-// ============================================================
-async function startDispensing() {
-    const dot = document.getElementById('statusDot');
-    if (!dot || !dot.classList.contains('connected')) {
-        showStatus('Cannot initiate: Controller is disconnected.', 'danger');
-        return;
-    }
-    if (dispensing) return;
-
-    const reagentA = Number(document.getElementById('waterSlider').value);
-    const reagentB = Number(document.getElementById('syrupSlider').value);
-    if (reagentA === 0 && reagentB === 0) {
-        showStatus('[ALERT] Both reagent volumes are zero. Set at least one volume before dispensing.', 'danger');
-        return;
-    }
-    showConfirmModal(reagentA, reagentB, () => executeDispense(reagentA, reagentB));
-}
-
-async function executeDispense(reagentA, reagentB) {
-    dispensing = true;
-
-    const btn = document.getElementById('dispenseBtn');
-    if (btn) btn.disabled = true;
-    _set('dispenseBtnText', '⏳ Dispensing...');
-
-    initMonitorUI(reagentA, reagentB);
-    startElapsedTimer();
-
-    try {
-        // ── Stage 1: Pump 1 ──
-        if (reagentA === 0) {
-            setPumpCardActive(1, false);
-            setMonBadge('monBadgeA', 'idle');
-            _set('monMsgA', 'Skipped (0 mL)');
-        } else {
-            await runPumpStage(1, reagentNames.A, reagentA, { reagent_a: reagentA, reagent_b: 0 });
-            if (!dispensing) return;
-            if (reagentB > 0) {
-                showStatus('[PAUSE]  Pump 1 complete. Switching to Pump 2 in 2 seconds…', 'info');
-                _set('pillPhase', '2s idle gap');
-                resetProgressBar();
-                await new Promise(r => setTimeout(r, 2000));
-            }
-        }
-
-        if (!dispensing) return;
-
-        // ── Stage 2: Pump 2 ──
-        if (reagentB === 0) {
-            setPumpCardActive(2, false);
-            setMonBadge('monBadgeB', 'idle');
-            _set('monMsgB', 'Skipped (0 mL)');
-        } else {
-            await runPumpStage(2, reagentNames.B, reagentB, { reagent_a: 0, reagent_b: reagentB });
-        }
-
-        await finishDispense(reagentA, reagentB);
-
-    } catch (error) {
-        console.error('[executeDispense]', error);
-        showStatus(`Error: ${error.message}`, 'danger');
-        resetDispenseUI();
-    }
-}
-
-// ============================================================
-//  Emergency Stop
-// ============================================================
+// ── Emergency stop ────────────────────────────────────────────
 function emergencyStop() {
-    stopProgressPoll();
-    stopElapsedTimer();
+    stopProgressPoll(); stopElapsedTimer();
+    const wasDispensing = dispensing;
     dispensing = false;
-
-    setPumpCardActive(1, false);
-    setPumpCardActive(2, false);
-    setDrip('dripA', false);
-    setDrip('dripB', false);
-    setMonBadge('monBadgeA', 'halted');
-    setMonBadge('monBadgeB', 'halted');
-    _set('pillSequence', 'Halted');
-    _set('pillPhase',    '—');
-    _set('pillFlowA',    '— mL/s');
-    _set('pillFlowB',    '— mL/s');
-
+    setPumpCardActive(1,false); setPumpCardActive(2,false);
+    setDrip('dripA',false); setDrip('dripB',false);
+    setMonBadge('monBadgeA','halted'); setMonBadge('monBadgeB','halted');
+    _set('pillSequence','Halted'); _set('pillPhase','—');
+    _set('pillFlowA','— mL/s'); _set('pillFlowB','— mL/s');
     clearSensorWarning();
-    showStatus('[EMERGENCY STOP]  All pumps halted. Inspect system before resuming.', 'danger');
-
+    showStatus('[EMERGENCY STOP]  All pumps halted.', 'danger');
     fetch('/emergency-stop', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body:   JSON.stringify({ reason: 'Operator triggered emergency stop' })
-    }).then(() => updateHistory()).catch(console.warn);
-
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ reason:'Operator triggered emergency stop' })
+    }).catch(console.warn);
     resetDispenseUI(true);
+    if (wasDispensing) overlayShowHalted(_overlayDispensedA, _overlayDispensedB);
 }
 
-// ============================================================
-//  Finish Dispense
-// ============================================================
-async function finishDispense(reagentA, reagentB) {
+// ── Finish dispense ───────────────────────────────────────────
+async function finishDispense(totalA, totalB) {
     stopElapsedTimer();
     try {
-        await fetch('/complete', { method: 'POST' });
-        _set('pillSequence', 'Completed');
-        _set('pillPhase',    'Done');
-        _set('pillFlowA',    '0.00 mL/s');
-        _set('pillFlowB',    '0.00 mL/s');
-        showStatus(
-            `[COMPLETE]  Sequence finished.  ${reagentNames.A}: ${reagentA} mL  |  ${reagentNames.B}: ${reagentB} mL`,
-            'success'
-        );
-        updateHistory();
-    } catch {
-        showStatus('Warning: Could not confirm completion with server.', 'warning');
-    }
+        await fetch('/complete', { method:'POST' });
+        _set('pillSequence','Completed'); _set('pillPhase','Done');
+        _set('pillFlowA','0.00 mL/s'); _set('pillFlowB','0.00 mL/s'); _set('pillStep','—');
+        showStatus(`[COMPLETE]  ${reagentNames.A}: ${totalA} mL  |  ${reagentNames.B}: ${totalB} mL`, 'success');
+        overlayShowComplete(totalA, totalB, protoName||null);
+    } catch { showStatus('Warning: Could not confirm completion.', 'warning'); }
     resetDispenseUI();
 }
 
-// ============================================================
-//  Reset Dispense UI
-// ============================================================
-function resetDispenseUI(keepBar = false) {
+function resetDispenseUI(keepBar=false) {
     dispensing = false;
+    activeProtocolSteps = null;
     const btn = document.getElementById('dispenseBtn');
     if (btn) btn.disabled = false;
-    _set('dispenseBtnText', '▶ Initiate Dispense');
+    _set('dispenseBtnText','▶ Initiate Dispense');
     if (!keepBar) resetProgressBar();
 }
 
-// ============================================================
-//  Init Monitor UI — sets targets + clears previous state
-//  Does NOT start any intervals.
-// ============================================================
+// ── Monitor init / reset ──────────────────────────────────────
 function initMonitorUI(targetA, targetB) {
-    setFlaskFill('flaskFillA', 0);
-    setFlaskFill('flaskFillB', 0);
-    setDrip('dripA', false);
-    setDrip('dripB', false);
-
-    _set('monVolA',    '0.00 mL');
-    _set('monVolB',    '0.00 mL');
-    _set('monTargetA', '/ ' + (targetA > 0 ? targetA.toFixed(1) : '0.0') + ' mL');
-    _set('monTargetB', '/ ' + (targetB > 0 ? targetB.toFixed(1) : '0.0') + ' mL');
-    _set('monMsgA',    targetA > 0 ? `Dispensing ${reagentNames.A}…` : 'Skipped (0 mL)');
-    _set('monMsgB',    targetB > 0 ? 'Waiting…'                      : 'Skipped (0 mL)');
-
-    setMonBadge('monBadgeA', targetA > 0 ? 'dispensing' : 'idle');
-    setMonBadge('monBadgeB', 'idle');
-    setPumpCardActive(1, targetA > 0);
-    setPumpCardActive(2, false);
-
-    _set('pillSequence', 'Starting…');
-    _set('pillPhase',    targetA > 0 ? `Pump 1 — ${reagentNames.A}` : `Pump 2 — ${reagentNames.B}`);
-    _set('pillFlowA',    '— mL/s');
-    _set('pillFlowB',    '— mL/s');
-    _set('pillElapsed',  '0.0s');
-
-    const segA = document.getElementById('monSegA');
-    const segB = document.getElementById('monSegB');
-    if (segA) { segA.style.width = '0%'; segA.classList.remove('has-b'); }
-    if (segB)   segB.style.width = '0%';
+    setFlaskFill('flaskFillA',0); setFlaskFill('flaskFillB',0);
+    setDrip('dripA',false); setDrip('dripB',false);
+    _set('monVolA','0.00 mL'); _set('monVolB','0.00 mL');
+    _set('monTargetA','/ '+(targetA>0?targetA.toFixed(1):'0.0')+' mL');
+    _set('monTargetB','/ '+(targetB>0?targetB.toFixed(1):'0.0')+' mL');
+    _set('monMsgA', targetA>0?`Dispensing ${reagentNames.A}…`:'Skipped (0 mL)');
+    _set('monMsgB', targetB>0?'Waiting…':'Skipped (0 mL)');
+    setMonBadge('monBadgeA', targetA>0?'dispensing':'idle');
+    setMonBadge('monBadgeB','idle');
+    setPumpCardActive(1, targetA>0); setPumpCardActive(2,false);
+    _set('pillSequence','Starting…'); _set('pillPhase', targetA>0?`Pump 1 — ${reagentNames.A}`:`Pump 2 — ${reagentNames.B}`);
+    _set('pillFlowA','— mL/s'); _set('pillFlowB','— mL/s'); _set('pillElapsed','0.0s'); _set('pillStep','—');
+    const segA=document.getElementById('monSegA'); const segB=document.getElementById('monSegB');
+    if (segA){segA.style.width='0%';segA.classList.remove('has-b');} if (segB) segB.style.width='0%';
 }
 
-// ============================================================
-//  Reset Monitor (refresh button / page load)
-// ============================================================
 function resetMonitorUI() {
-    if (dispensing) { showStatus('Cannot reset monitor while dispensing is active.', 'danger'); return; }
-    stopProgressPoll();
-    stopElapsedTimer();
-
-    setFlaskFill('flaskFillA', 0);
-    setFlaskFill('flaskFillB', 0);
-    setDrip('dripA', false);
-    setDrip('dripB', false);
-
-    _set('monVolA',    '0.00 mL');
-    _set('monVolB',    '0.00 mL');
-    _set('monTargetA', '/ — mL');
-    _set('monTargetB', '/ — mL');
-    _set('monMsgA',    'Waiting to start…');
-    _set('monMsgB',    'Waiting…');
-
-    setMonBadge('monBadgeA', 'idle');
-    setMonBadge('monBadgeB', 'idle');
-    setPumpCardActive(1, false);
-    setPumpCardActive(2, false);
-
-    _set('pillSequence', 'Idle');
-    _set('pillPhase',    '—');
-    _set('pillFlowA',    '— mL/s');
-    _set('pillFlowB',    '— mL/s');
-    _set('pillElapsed',  '—');
-
-    const segA = document.getElementById('monSegA');
-    const segB = document.getElementById('monSegB');
-    if (segA) { segA.style.width = '0%'; segA.classList.remove('has-b'); }
-    if (segB)   segB.style.width = '0%';
-
+    if (dispensing) { showStatus('Cannot reset while dispensing.','danger'); return; }
+    stopProgressPoll(); stopElapsedTimer();
+    setFlaskFill('flaskFillA',0); setFlaskFill('flaskFillB',0);
+    setDrip('dripA',false); setDrip('dripB',false);
+    _set('monVolA','0.00 mL'); _set('monVolB','0.00 mL');
+    _set('monTargetA','/ — mL'); _set('monTargetB','/ — mL');
+    _set('monMsgA','Waiting to start…'); _set('monMsgB','Waiting…');
+    setMonBadge('monBadgeA','idle'); setMonBadge('monBadgeB','idle');
+    setPumpCardActive(1,false); setPumpCardActive(2,false);
+    _set('pillSequence','Idle'); _set('pillPhase','—'); _set('pillStep','—');
+    _set('pillFlowA','— mL/s'); _set('pillFlowB','— mL/s'); _set('pillElapsed','—');
+    const segA=document.getElementById('monSegA'); const segB=document.getElementById('monSegB');
+    if (segA){segA.style.width='0%';segA.classList.remove('has-b');} if (segB) segB.style.width='0%';
     clearSensorWarning();
-    showStatus('Monitor reset. System ready.', 'info');
+    showStatus('Monitor reset. System ready.','info');
 }
-
 function resetMonitor() { resetMonitorUI(); }
 
-// ============================================================
-//  Status Box
-// ============================================================
-function showStatus(message, type = 'info') {
+// ── Status box ────────────────────────────────────────────────
+function showStatus(message, type='info') {
     const el = document.getElementById('statusBox');
     if (el) { el.textContent = message; el.className = `live-monitor status-${type}`; }
 }
 
-// ============================================================
-//  Sensor Warning Banner
-//  A persistent, highly-visible banner that sits ABOVE the
-//  status box while the stale-sensor condition is active.
-//  Cleared when real flow data arrives or stop is pressed.
-// ============================================================
+// ── Sensor warning ────────────────────────────────────────────
 function showSensorWarning(seconds) {
     let banner = document.getElementById('sensorWarningBanner');
     if (!banner) {
-        // Create the banner and insert it just before the status box
         banner = document.createElement('div');
-        banner.id        = 'sensorWarningBanner';
+        banner.id = 'sensorWarningBanner';
         banner.className = 'sensor-warning-banner';
-        const statusBox = document.getElementById('statusBox');
-        if (statusBox && statusBox.parentNode) {
-            statusBox.parentNode.insertBefore(banner, statusBox);
-        }
+        const sb = document.getElementById('statusBox');
+        if (sb && sb.parentNode) sb.parentNode.insertBefore(banner, sb);
     }
-    banner.innerHTML =
-        `<span class="swb-icon">⚠</span>` +
-        `<span class="swb-text">` +
-            `<strong>No flow detected after ${seconds}s.</strong> ` +
-            `Flow sensor may not be connected. ` +
-            `The pump is running but cannot measure output. ` +
-            `<strong>Press Emergency Stop to halt the pump.</strong>` +
-        `</span>`;
+    banner.innerHTML = `<span class="swb-icon">⚠</span><span class="swb-text"><strong>No flow detected after ${seconds}s.</strong> Sensor may not be connected. <strong>Press Emergency Stop to halt.</strong></span>`;
     banner.style.display = 'flex';
-
-    // Also update the status box so it echoes the warning
-    showStatus(
-        `⚠ SENSOR WARNING — No flow detected after ${seconds}s. ` +
-        `Press Emergency Stop to halt the pump.`,
-        'warning'
-    );
+    showStatus(`⚠ SENSOR WARNING — No flow after ${seconds}s. Press Emergency Stop.`, 'warning');
 }
-
 function hideSensorWarning() {
-    const banner = document.getElementById('sensorWarningBanner');
-    if (banner) banner.style.display = 'none';
-    showStatus('Flow detected — sensor is active. Resuming normal monitoring.', 'info');
+    const b = document.getElementById('sensorWarningBanner');
+    if (b) b.style.display = 'none';
+    showStatus('Flow detected — sensor active.', 'info');
 }
-
 function clearSensorWarning() {
-    const banner = document.getElementById('sensorWarningBanner');
-    if (banner) banner.style.display = 'none';
+    const b = document.getElementById('sensorWarningBanner');
+    if (b) b.style.display = 'none';
 }
 
-// ============================================================
-//  Controller Status Check
-// ============================================================
+// ── ESP32 status ──────────────────────────────────────────────
 function checkESP32Status() {
-    fetch('/esp32/status', { cache: 'no-store' })
+    fetch('/esp32/status', { cache:'no-store' })
         .then(r => r.json())
         .then(data => {
             const ok   = data.status === 'connected';
@@ -800,13 +1009,253 @@ function checkESP32Status() {
             if (btn && !dispensing) btn.disabled = true;
         });
 }
-
 setInterval(checkESP32Status, 2000);
 
-// ============================================================
-//  History
-// ============================================================
-function updateHistory(page = 0) {
+// ── Analytics ─────────────────────────────────────────────────
+function openAnalyticsModal() {
+    new bootstrap.Modal(document.getElementById('analyticsModal')).show();
+    fetch('/analytics')
+        .then(r => r.json())
+        .then(data => renderAnalytics(data))
+        .catch(() => {
+            document.getElementById('analyticsSummary').innerHTML =
+                '<div class="text-center" style="color:var(--danger);font-family:var(--font-mono);font-size:0.8rem;">Failed to load analytics.</div>';
+        });
+}
+
+function renderAnalytics(data) {
+    const byDate = data.by_date || [];
+    const total  = byDate.reduce((a,d)=>a+d.total_ml,0);
+    const count  = byDate.reduce((a,d)=>a+d.count,0);
+    const estops = byDate.reduce((a,d)=>a+d.emergency_stops,0);
+
+    // Summary cards
+    document.getElementById('analyticsSummary').innerHTML = `
+        <div class="analytics-card"><div class="analytics-card-label">Total Dispensed</div><div class="analytics-card-val">${total.toFixed(0)} mL</div></div>
+        <div class="analytics-card"><div class="analytics-card-label">Dispense Events</div><div class="analytics-card-val">${count}</div></div>
+        <div class="analytics-card"><div class="analytics-card-label">Emergency Stops</div><div class="analytics-card-val" style="color:var(--danger)">${estops}</div></div>
+        <div class="analytics-card"><div class="analytics-card-label">Days Active</div><div class="analytics-card-val">${byDate.length}</div></div>`;
+
+    // Chart
+    const ctx = document.getElementById('analyticsChart').getContext('2d');
+    if (analyticsChartInst) { analyticsChartInst.destroy(); analyticsChartInst = null; }
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const gridColor  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+    const tickColor  = isDark ? '#6e7681' : '#8a92a0';
+    const labelColor = isDark ? '#e6edf3' : '#1a1d23';
+
+    analyticsChartInst = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: byDate.map(d => d.date),
+            datasets: [
+                { label: reagentNames.A, data: byDate.map(d=>d.reagent_a_ml), backgroundColor: 'rgba(59,130,246,0.7)', borderColor:'#3b82f6', borderWidth:1, borderRadius:4 },
+                { label: reagentNames.B, data: byDate.map(d=>d.reagent_b_ml), backgroundColor: 'rgba(16,185,129,0.7)', borderColor:'#10b981', borderWidth:1, borderRadius:4 }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: labelColor, font: { family: "'IBM Plex Mono'" } } },
+                tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} mL` } }
+            },
+            scales: {
+                x: { stacked: true, ticks: { color: tickColor, font:{family:"'IBM Plex Mono'",size:11} }, grid: { color: gridColor } },
+                y: { stacked: true, ticks: { color: tickColor, font:{family:"'IBM Plex Mono'",size:11}, callback: v => v+' mL' }, grid: { color: gridColor } }
+            }
+        }
+    });
+
+    // Operator table (admin only)
+    const opDiv = document.getElementById('analyticsOperatorTable');
+    if (data.role === 'admin' && data.by_operator?.length > 0) {
+        let rows = data.by_operator.map(op => `
+            <tr>
+                <td>${op.operator}</td>
+                <td class="text-end" style="font-family:var(--font-mono)">${op.total_ml.toFixed(1)} mL</td>
+                <td class="text-end" style="font-family:var(--font-mono)">${op.count}</td>
+                <td class="text-end" style="font-family:var(--font-mono);color:var(--${op.emergency_stops>0?'danger':'text-3'})">${op.emergency_stops}</td>
+            </tr>`).join('');
+        opDiv.innerHTML = `
+            <div style="margin-top:20px">
+                <div class="section-label mb-2">By Operator</div>
+                <table class="table dash-table">
+                    <thead><tr><th>Operator</th><th class="text-end">Total</th><th class="text-end">Events</th><th class="text-end">E-Stops</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+    } else {
+        opDiv.innerHTML = '';
+    }
+}
+
+// ── Inventory ─────────────────────────────────────────────────
+function openInventoryModal() {
+    new bootstrap.Modal(document.getElementById('inventoryModal')).show();
+    loadInventory(true);
+}
+
+function loadInventory(renderModal=false) {
+    fetch('/inventory')
+        .then(r => r.json())
+        .then(items => {
+            // Check for low stock warnings (banner at top of page)
+            const low = items.filter(i => i.current_ml <= i.warn_threshold_ml);
+            const banner = document.getElementById('inventoryWarningBanner');
+            const txt    = document.getElementById('inventoryWarningText');
+            if (low.length > 0 && banner && txt) {
+                const names = low.map(i => `${i.reagent==='A'?reagentNames.A:reagentNames.B} (${i.current_ml.toFixed(0)}/${i.warn_threshold_ml.toFixed(0)} mL)`).join(', ');
+                txt.textContent = `Low stock: ${names}`;
+                banner.style.display = 'flex';
+            } else if (banner) {
+                banner.style.display = 'none';
+            }
+
+            if (!renderModal) return;
+
+            // Render modal body
+            const body = document.getElementById('inventoryBody');
+            if (!body) return;
+            body.innerHTML = items.map(item => {
+                const name    = item.reagent==='A' ? reagentNames.A : reagentNames.B;
+                const pct     = item.capacity_ml > 0 ? (item.current_ml/item.capacity_ml*100) : 0;
+                const isLow   = item.current_ml <= item.warn_threshold_ml;
+                const barColor= isLow ? 'var(--danger)' : (item.reagent==='A'?'var(--reagent-a)':'var(--reagent-b)');
+                const adminCfg= currentUserRole==='admin' ? `
+                    <div class="inv-configure-form" id="invCfg-${item.reagent}" style="display:none">
+                        <div class="row g-2 mt-2">
+                            <div class="col-4"><label class="dash-label">Capacity (mL)</label>
+                                <input type="number" class="dash-input" id="invCap-${item.reagent}" value="${item.capacity_ml}" min="1"></div>
+                            <div class="col-4"><label class="dash-label">Current (mL)</label>
+                                <input type="number" class="dash-input" id="invCur-${item.reagent}" value="${item.current_ml.toFixed(0)}" min="0" max="${item.capacity_ml}"></div>
+                            <div class="col-4"><label class="dash-label">Warn below (mL)</label>
+                                <input type="number" class="dash-input" id="invWarn-${item.reagent}" value="${item.warn_threshold_ml}" min="0"></div>
+                        </div>
+                        <div class="mt-2 d-flex gap-2">
+                            <button class="btn-modal-confirm" onclick="saveInvConfig('${item.reagent}')">Save</button>
+                            <button class="btn-modal-cancel" onclick="document.getElementById('invCfg-${item.reagent}').style.display='none'">Cancel</button>
+                        </div>
+                    </div>` : '';
+                return `
+                    <div class="inv-item" style="margin-bottom:20px">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="inv-name">${name}</span>
+                            <span class="inv-vol ${isLow?'inv-low':''}">${item.current_ml.toFixed(0)} / ${item.capacity_ml.toFixed(0)} mL</span>
+                        </div>
+                        <div class="inv-bar-wrap">
+                            <div class="inv-bar-fill" style="width:${Math.min(pct,100).toFixed(1)}%;background:${barColor}"></div>
+                        </div>
+                        ${isLow?`<div class="inv-warn-msg">⚠ Below warning threshold (${item.warn_threshold_ml.toFixed(0)} mL)</div>`:''}
+                        <div class="d-flex gap-2 mt-2">
+                            <input type="number" class="dash-input" id="refillAmt-${item.reagent}" placeholder="Refill amount (mL)" min="1" style="max-width:180px">
+                            <button class="btn-modal-confirm" onclick="refillReagent('${item.reagent}')">+ Refill</button>
+                            ${currentUserRole==='admin'?`<button class="btn-modal-cancel" onclick="document.getElementById('invCfg-${item.reagent}').style.display=''">Configure</button>`:''}
+                        </div>
+                        ${adminCfg}
+                    </div>`;
+            }).join('<hr style="border-color:var(--border)">');
+        })
+        .catch(() => {
+            const body = document.getElementById('inventoryBody');
+            if (body) body.innerHTML = '<div style="color:var(--danger);font-family:var(--font-mono);font-size:0.8rem;">Failed to load inventory.</div>';
+        });
+}
+
+function refillReagent(reagent) {
+    const amt = parseFloat(document.getElementById(`refillAmt-${reagent}`)?.value);
+    if (!amt || amt <= 0) { showStatus('Enter a valid refill amount.', 'danger'); return; }
+    fetch('/inventory/update', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'refill', reagent, amount_ml: amt })
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.status==='success') { loadInventory(true); showStatus(`${reagent==='A'?reagentNames.A:reagentNames.B} refilled by ${amt} mL.`, 'success'); }
+        else showStatus(d.message, 'danger');
+    })
+    .catch(() => showStatus('Refill failed.','danger'));
+}
+
+function saveInvConfig(reagent) {
+    const capacity = parseFloat(document.getElementById(`invCap-${reagent}`)?.value);
+    const current  = parseFloat(document.getElementById(`invCur-${reagent}`)?.value);
+    const warn     = parseFloat(document.getElementById(`invWarn-${reagent}`)?.value);
+    fetch('/inventory/update', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'configure', reagent, capacity_ml:capacity, current_ml:current, warn_threshold_ml:warn })
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.status==='success') { loadInventory(true); showStatus('Inventory configured.','success'); }
+        else showStatus(d.message,'danger');
+    });
+}
+
+// ── Print / PDF report ────────────────────────────────────────
+function printReport() {
+    fetch('/report')
+        .then(r => r.json())
+        .then(data => {
+            const nameA = data.reagent_a_name || 'Reagent A';
+            const nameB = data.reagent_b_name || 'Reagent B';
+            const inv   = (data.inventory || []).map(i =>
+                `<tr><td>${i.reagent==='A'?nameA:nameB}</td><td>${i.current_ml.toFixed(0)} mL</td><td>${i.capacity_ml.toFixed(0)} mL</td><td>${i.warn_threshold_ml.toFixed(0)} mL</td></tr>`
+            ).join('');
+            const totalA = data.records.reduce((a,r)=>a+(r.dispensed_reagent_a_ml||0),0);
+            const totalB = data.records.reduce((a,r)=>a+(r.dispensed_reagent_b_ml||0),0);
+            const rows   = data.records.map(r => {
+                const a   = (r.dispensed_reagent_a_ml||0).toFixed(1);
+                const b   = (r.dispensed_reagent_b_ml||0).toFixed(1);
+                const tot = ((r.dispensed_reagent_a_ml||0)+(r.dispensed_reagent_b_ml||0)).toFixed(1);
+                const st  = r.status==='COMPLETED'
+                    ? '<span style="color:#10b981">✓ Completed</span>'
+                    : '<span style="color:#ef4444">✗ E-Stop</span>';
+                return `<tr><td>${r.start_time||'—'}</td><td>${r.operator||'—'}</td><td>${a}</td><td>${b}</td><td>${tot}</td><td>${st}</td></tr>`;
+            }).join('');
+
+            const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>AMRDS Dispense Report</title>
+<style>
+  body { font-family: "IBM Plex Sans", Arial, sans-serif; font-size: 12px; color: #1a1d23; margin: 0; padding: 20px; }
+  h1   { font-size: 18px; margin-bottom: 4px; }
+  h2   { font-size: 13px; margin: 20px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; color: #444; }
+  .meta { font-size: 11px; color: #666; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th, td { padding: 5px 8px; border: 1px solid #ddd; text-align: left; font-size: 11px; }
+  th { background: #f5f5f5; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafafa; }
+  .summary-row { display: flex; gap: 20px; margin-bottom: 16px; }
+  .summary-card { border: 1px solid #ddd; border-radius: 6px; padding: 10px 16px; min-width: 120px; }
+  .summary-card .label { font-size: 10px; color: #888; text-transform: uppercase; }
+  .summary-card .val   { font-size: 18px; font-weight: 600; margin-top: 2px; font-family: "IBM Plex Mono", monospace; }
+  @media print { @page { margin: 15mm; } }
+</style></head><body>
+<h1>⚗ AMRDS Dispense Report</h1>
+<div class="meta">Generated: ${data.generated_at} &nbsp;|&nbsp; By: ${data.generated_by} &nbsp;|&nbsp; Role: ${data.role}</div>
+<div class="summary-row">
+  <div class="summary-card"><div class="label">Total ${nameA}</div><div class="val">${totalA.toFixed(1)} mL</div></div>
+  <div class="summary-card"><div class="label">Total ${nameB}</div><div class="val">${totalB.toFixed(1)} mL</div></div>
+  <div class="summary-card"><div class="label">Records</div><div class="val">${data.records.length}</div></div>
+</div>
+${inv ? `<h2>Reagent Inventory</h2>
+<table><thead><tr><th>Reagent</th><th>Current</th><th>Capacity</th><th>Warn Below</th></tr></thead>
+<tbody>${inv}</tbody></table>` : ''}
+<h2>Dispense Records</h2>
+<table><thead><tr><th>Timestamp</th><th>Operator</th><th>${nameA} (mL)</th><th>${nameB} (mL)</th><th>Total (mL)</th><th>Status</th></tr></thead>
+<tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#888">No records</td></tr>'}</tbody></table>
+<script>window.onload=()=>{window.print();}<\/script>
+</body></html>`;
+
+            const w = window.open('', '_blank');
+            if (w) { w.document.write(html); w.document.close(); }
+            else showStatus('Please allow popups to print the report.', 'warning');
+        })
+        .catch(() => showStatus('Failed to generate report.', 'danger'));
+}
+
+// ── History ───────────────────────────────────────────────────
+function updateHistory(page=0) {
     fetch('/history')
         .then(r => r.json())
         .then(events => {
@@ -814,224 +1263,153 @@ function updateHistory(page = 0) {
             list.innerHTML = '';
             if (!events.length) {
                 list.innerHTML = '<li class="log-empty">No dispense records found.</li>';
-                _set('pageInfo', 'Page 1');
+                _set('pageInfo','Page 1');
                 document.getElementById('prevHistory').disabled = true;
                 document.getElementById('nextHistory').disabled = true;
                 return;
             }
             currentHistoryPage = page;
-            const start      = page * historyPerPage;
-            const end        = start + historyPerPage;
-            const totalPages = Math.ceil(events.length / historyPerPage);
-            events.slice(start, end).forEach(event => {
+            const start = page*historyPerPage, end = start+historyPerPage;
+            const total = Math.ceil(events.length/historyPerPage);
+            events.slice(start, end).forEach(ev => {
                 const li     = document.createElement('li');
-                li.className = 'log-item ' + (event.type === 'DISPENSE' ? 'log-completed' : 'log-emergency');
-                const tLabel = event.type === 'DISPENSE' ? 'COMPLETED' : 'EMERGENCY STOP';
-                const tClass = event.type === 'DISPENSE' ? 'type-completed' : 'type-emergency';
-                const delBtn = currentUserRole === 'admin'
-                    ? `<button class="log-delete-btn" onclick="deleteHistory(${event.id})">✕</button>`
-                    : '';
+                li.className = 'log-item '+(ev.type==='DISPENSE'?'log-completed':'log-emergency');
+                const tLabel = ev.type==='DISPENSE' ? 'COMPLETED' : 'EMERGENCY STOP';
+                const tClass = ev.type==='DISPENSE' ? 'type-completed' : 'type-emergency';
+                const delBtn = currentUserRole==='admin'
+                    ? `<button class="log-delete-btn" onclick="deleteHistory(${ev.id})">✕</button>` : '';
                 li.innerHTML = `
                     <div class="log-item-content">
                         <div class="log-type ${tClass}">${tLabel}</div>
-                        <div class="log-message">${event.message}</div>
+                        <div class="log-message">${ev.message}</div>
                         <div class="log-meta">
-                            <span class="log-operator">👤 ${event.operator || 'unknown'}</span>
-                            <span class="log-time">⏱ ${event.timestamp}</span>
-                            ${event.end_time ? `<span class="log-time">→ ${event.end_time}</span>` : ''}
+                            <span class="log-operator">👤 ${ev.operator||'unknown'}</span>
+                            <span class="log-time">⏱ ${ev.timestamp}</span>
+                            ${ev.end_time?`<span class="log-time">→ ${ev.end_time}</span>`:''}
                         </div>
                     </div>${delBtn}`;
                 list.appendChild(li);
             });
-            _set('pageInfo', `Page ${page + 1} / ${totalPages}`);
-            document.getElementById('prevHistory').disabled = (currentHistoryPage === 0);
-            document.getElementById('nextHistory').disabled = (end >= events.length);
+            _set('pageInfo',`Page ${page+1} / ${total}`);
+            document.getElementById('prevHistory').disabled = (currentHistoryPage===0);
+            document.getElementById('nextHistory').disabled = (end>=events.length);
         })
         .catch(() => {
             document.getElementById('historyList').innerHTML =
                 '<li class="log-empty">Failed to load records.</li>';
         });
 }
-
-function prevHistory() { if (currentHistoryPage > 0) updateHistory(currentHistoryPage - 1); }
-function nextHistory() { updateHistory(currentHistoryPage + 1); }
-
+function prevHistory() { if (currentHistoryPage>0) updateHistory(currentHistoryPage-1); }
+function nextHistory() { updateHistory(currentHistoryPage+1); }
 function deleteHistory(id) {
     if (!confirm('Delete this record?')) return;
-    fetch(`/delete-history/${id}`, { method: 'DELETE' })
-        .then(r => r.json())
-        .then(d => {
-            if (d.status === 'success') { showStatus('Record deleted.', 'success'); updateHistory(currentHistoryPage); }
-            else showStatus(d.message, 'danger');
-        })
-        .catch(err => showStatus(err.message, 'danger'));
+    fetch(`/delete-history/${id}`, {method:'DELETE'})
+        .then(r=>r.json())
+        .then(d => { if (d.status==='success'){showStatus('Record deleted.','success');updateHistory(currentHistoryPage);}else showStatus(d.message,'danger'); });
 }
-
 function clearHistory() {
-    if (!confirm('Clear all dispense log records?')) return;
-    fetch('/clear-history', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-            if (d.status === 'success') { showStatus('Dispense log cleared.', 'success'); updateHistory(0); }
-            else showStatus(d.message, 'danger');
-        })
-        .catch(err => showStatus(err.message, 'danger'));
+    if (!confirm('Clear all records?')) return;
+    fetch('/clear-history',{method:'POST'}).then(r=>r.json())
+        .then(d => { if(d.status==='success'){showStatus('Log cleared.','success');updateHistory(0);}else showStatus(d.message,'danger'); });
 }
-
 function exportCSV() {
-    fetch('/history')
-        .then(r => r.json())
-        .then(events => {
-            if (!events.length) { showStatus('No records to export.', 'info'); return; }
-            const rows = events.map(e =>
-                [e.id, `"${e.timestamp}"`, e.type, `"${e.message.replace(/"/g,'""')}"`].join(',')
-            );
-            const csv  = ['ID,Timestamp,Type,Message', ...rows].join('\n');
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url  = URL.createObjectURL(blob);
-            const a    = Object.assign(document.createElement('a'),
-                { href: url, download: `dispense_log_${new Date().toISOString().slice(0,10)}.csv` });
-            a.click();
-            URL.revokeObjectURL(url);
-            showStatus('Log exported as CSV.', 'success');
-        })
-        .catch(() => showStatus('Failed to export log.', 'danger'));
-}
-
-// ============================================================
-//  User Management
-// ============================================================
-function openUserModal() {
-    loadUsers();
-    new bootstrap.Modal(document.getElementById('userModal')).show();
-}
-
-function loadUsers() {
-    fetch('/users')
-        .then(r => r.json())
-        .then(users => {
-            const selfName = document.getElementById('operatorName')?.textContent?.trim() || '';
-            const tbody    = document.getElementById('userTableBody');
-            tbody.innerHTML = '';
-            users.forEach(u => {
-                const isSelf = u.username === selfName;
-                tbody.innerHTML += `<tr>
-                    <td>${u.id}</td>
-                    <td><strong>${u.username}</strong></td>
-                    <td><span class="nav-role-pill role-${u.role}">${u.role.toUpperCase()}</span></td>
-                    <td>${u.created_at || '—'}</td>
-                    <td>${!isSelf
-                        ? `<button class="btn btn-sm btn-outline-danger" onclick="removeUser(${u.id},'${u.username}')">✕ Remove</button>`
-                        : '<span style="font-size:0.75rem;color:var(--text-3)">(you)</span>'
-                    }</td></tr>`;
-            });
-        })
-        .catch(() => {
-            document.getElementById('userTableBody').innerHTML =
-                '<tr><td colspan="5" class="text-center text-muted">Failed to load users.</td></tr>';
-        });
-}
-
-function addUser() {
-    const username = document.getElementById('newUsername').value.trim();
-    const password = document.getElementById('newPassword').value;
-    const role     = document.getElementById('newRole').value;
-    if (!username || !password) { showUserMsg('Username and password are required.', 'danger'); return; }
-    fetch('/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password,role}) })
-        .then(r => r.json())
-        .then(d => {
-            if (d.status === 'success') {
-                showUserMsg(d.message, 'success');
-                document.getElementById('newUsername').value = '';
-                document.getElementById('newPassword').value = '';
-                loadUsers();
-            } else showUserMsg(d.message, 'danger');
-        })
-        .catch(() => showUserMsg('Request failed.', 'danger'));
-}
-
-function removeUser(id, username) {
-    if (!confirm(`Remove user "${username}"?`)) return;
-    fetch(`/users/${id}`, { method: 'DELETE' })
-        .then(r => r.json())
-        .then(d => {
-            if (d.status === 'success') { showUserMsg(`User "${username}" removed.`, 'success'); loadUsers(); }
-            else showUserMsg(d.message, 'danger');
-        })
-        .catch(() => showUserMsg('Request failed.', 'danger'));
-}
-
-function showUserMsg(msg, type) {
-    const el = document.getElementById('userFormMsg');
-    if (!el) return;
-    el.innerHTML = `<span class="user-msg user-msg-${type}">${msg}</span>`;
-    setTimeout(() => el.innerHTML = '', 4000);
-}
-
-// ============================================================
-//  Change Password
-// ============================================================
-function openChangePasswordModal() {
-    ['currentPassword','newPasswordChange','confirmNewPassword'].forEach(id => {
-        const el = document.getElementById(id); if (el) el.value = '';
+    fetch('/history').then(r=>r.json()).then(events => {
+        if (!events.length){showStatus('No records to export.','info');return;}
+        const rows = events.map(e=>[e.id,`"${e.timestamp}"`,e.type,`"${e.message.replace(/"/g,'""')}"`].join(','));
+        const csv  = ['ID,Timestamp,Type,Message',...rows].join('\n');
+        const blob = new Blob([csv],{type:'text/csv'});
+        const url  = URL.createObjectURL(blob);
+        const a    = Object.assign(document.createElement('a'),{href:url,download:`dispense_log_${new Date().toISOString().slice(0,10)}.csv`});
+        a.click(); URL.revokeObjectURL(url);
+        showStatus('Log exported.','success');
     });
-    const msg = document.getElementById('changePasswordMsg');
-    if (msg) msg.innerHTML = '';
+}
+
+// ── User Management ───────────────────────────────────────────
+function openUserModal() { loadUsers(); new bootstrap.Modal(document.getElementById('userModal')).show(); }
+function loadUsers() {
+    fetch('/users').then(r=>r.json()).then(users => {
+        const self  = document.getElementById('operatorName')?.textContent?.trim()||'';
+        const tbody = document.getElementById('userTableBody');
+        tbody.innerHTML = '';
+        users.forEach(u => {
+            const isSelf = u.username===self;
+            tbody.innerHTML += `<tr>
+                <td>${u.id}</td><td><strong>${u.username}</strong></td>
+                <td><span class="nav-role-pill role-${u.role}">${u.role.toUpperCase()}</span></td>
+                <td>${u.created_at||'—'}</td>
+                <td>${!isSelf?`<button class="btn btn-sm btn-outline-danger" onclick="removeUser(${u.id},'${u.username}')">✕ Remove</button>`:'<span style="font-size:0.75rem;color:var(--text-3)">(you)</span>'}</td>
+            </tr>`;
+        });
+    }).catch(() => { document.getElementById('userTableBody').innerHTML='<tr><td colspan="5" class="text-center text-muted">Failed to load users.</td></tr>'; });
+}
+function addUser() {
+    const username=document.getElementById('newUsername').value.trim();
+    const password=document.getElementById('newPassword').value;
+    const role    =document.getElementById('newRole').value;
+    if (!username||!password){showUserMsg('Username and password required.','danger');return;}
+    fetch('/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,role})})
+        .then(r=>r.json()).then(d=>{if(d.status==='success'){showUserMsg(d.message,'success');document.getElementById('newUsername').value='';document.getElementById('newPassword').value='';loadUsers();}else showUserMsg(d.message,'danger');});
+}
+function removeUser(id,username) {
+    if (!confirm(`Remove user "${username}"?`)) return;
+    fetch(`/users/${id}`,{method:'DELETE'}).then(r=>r.json()).then(d=>{if(d.status==='success'){showUserMsg(`User "${username}" removed.`,'success');loadUsers();}else showUserMsg(d.message,'danger');});
+}
+function showUserMsg(msg,type) {
+    const el=document.getElementById('userFormMsg');
+    if (!el) return;
+    el.innerHTML=`<span class="user-msg user-msg-${type}">${msg}</span>`;
+    setTimeout(()=>el.innerHTML='',4000);
+}
+
+// ── Change Password ───────────────────────────────────────────
+function openChangePasswordModal() {
+    ['currentPassword','newPasswordChange','confirmNewPassword'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+    const msg=document.getElementById('changePasswordMsg');if(msg)msg.innerHTML='';
     new bootstrap.Modal(document.getElementById('changePasswordModal')).show();
 }
-
 function submitChangePassword() {
-    const current = document.getElementById('currentPassword').value;
-    const newPwd  = document.getElementById('newPasswordChange').value;
-    const confirm = document.getElementById('confirmNewPassword').value;
-    if (!current || !newPwd || !confirm) { showCPMsg('All fields are required.', 'danger'); return; }
-    if (newPwd !== confirm) { showCPMsg('New passwords do not match.', 'danger'); return; }
-    if (newPwd.length < 6) { showCPMsg('Password must be at least 6 characters.', 'danger'); return; }
-    fetch('/change-password', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ current_password: current, new_password: newPwd }) })
-        .then(r => r.json())
-        .then(d => {
-            if (d.status === 'success') {
-                showCPMsg('Password updated. Signing you out…', 'success');
-                setTimeout(() => {
-                    fetch('/logout', { method: 'POST' }).finally(() => { window.location.href = '/login'; });
-                }, 1800);
-            } else showCPMsg(d.message, 'danger');
-        })
-        .catch(() => showCPMsg('Request failed.', 'danger'));
+    const current=document.getElementById('currentPassword').value;
+    const newPwd =document.getElementById('newPasswordChange').value;
+    const confirm=document.getElementById('confirmNewPassword').value;
+    if (!current||!newPwd||!confirm){showCPMsg('All fields are required.','danger');return;}
+    if (newPwd!==confirm){showCPMsg('Passwords do not match.','danger');return;}
+    if (newPwd.length<6){showCPMsg('Minimum 6 characters.','danger');return;}
+    fetch('/change-password',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({current_password:current,new_password:newPwd})})
+        .then(r=>r.json()).then(d=>{
+            if(d.status==='success'){showCPMsg('Updated. Signing out…','success');
+                setTimeout(()=>{fetch('/logout',{method:'POST'}).finally(()=>{window.location.href='/login';});},1800);}
+            else showCPMsg(d.message,'danger');
+        }).catch(()=>showCPMsg('Request failed.','danger'));
 }
+function showCPMsg(msg,type){const el=document.getElementById('changePasswordMsg');if(el)el.innerHTML=`<span class="user-msg user-msg-${type}">${msg}</span>`;}
 
-function showCPMsg(msg, type) {
-    const el = document.getElementById('changePasswordMsg');
-    if (el) el.innerHTML = `<span class="user-msg user-msg-${type}">${msg}</span>`;
-}
+// ── User Dropdown ─────────────────────────────────────────────
+function toggleUserDropdown(){document.getElementById('userDropdownWrap')?.classList.toggle('open');}
+function closeUserDropdown(){document.getElementById('userDropdownWrap')?.classList.remove('open');}
+document.addEventListener('click',e=>{const w=document.getElementById('userDropdownWrap');if(w&&!w.contains(e.target))w.classList.remove('open');});
 
-// ============================================================
-//  User Dropdown
-// ============================================================
-function toggleUserDropdown() {
-    document.getElementById('userDropdownWrap')?.classList.toggle('open');
-}
-function closeUserDropdown() {
-    document.getElementById('userDropdownWrap')?.classList.remove('open');
-}
-document.addEventListener('click', e => {
-    const wrap = document.getElementById('userDropdownWrap');
-    if (wrap && !wrap.contains(e.target)) wrap.classList.remove('open');
-});
-
-// ============================================================
-//  DOMContentLoaded
-// ============================================================
+// ── DOMContentLoaded ──────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     initTheme();
-    bindSlider('waterSlider', 'waterValue');
-    bindSlider('syrupSlider', 'syrupValue');
-    updateSummary();
-    resetMonitor();
-    checkESP32Status();
-    fetch('/session-info')
-        .then(r => r.json())
-        .then(d => applyRoleUI(d.role))
-        .catch(() => showSessionExpired());
+    bindSlider('waterSlider','waterValue');
+    bindSlider('syrupSlider','syrupValue');
+
+    Promise.all([
+        fetch('/session-info').then(r=>r.json()),
+        fetch('/settings/reagent-names').then(r=>r.json())
+    ])
+    .then(([sess, names]) => {
+        applyRoleUI(sess.role);
+        applyReagentNames(names.a, names.b);
+    })
+    .catch(() => showSessionExpired())
+    .finally(() => {
+        updateSummary();
+        resetMonitor();
+        checkESP32Status();
+        loadProtocols();
+        loadInventory(false); // check for low stock on load
+    });
 });
