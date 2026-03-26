@@ -11,11 +11,110 @@
 </head>
 <body>
 
+<!-- ===== SVG ICON SPRITE ===== -->
+<!-- All icons defined once, referenced via <use href="#icon-*"> -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <!-- flask / reagent -->
+  <symbol id="icon-flask" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 3h6M9 3v7L4.5 17A2 2 0 006.4 20h11.2a2 2 0 001.9-3L15 10V3"/>
+    <line x1="6.5" y1="14" x2="17.5" y2="14"/>
+  </symbol>
+  <!-- analytics / bar chart -->
+  <symbol id="icon-analytics" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/>
+  </symbol>
+  <!-- theme / sun -->
+  <symbol id="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="5"/>
+    <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+    <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+  </symbol>
+  <!-- theme / moon -->
+  <symbol id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+  </symbol>
+  <!-- settings / gear -->
+  <symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+  </symbol>
+  <!-- pencil / edit -->
+  <symbol id="icon-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+    <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+  </symbol>
+  <!-- log / clipboard -->
+  <symbol id="icon-log" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/>
+    <rect x="8" y="2" width="8" height="4" rx="1"/>
+    <line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="12" y2="16"/>
+  </symbol>
+  <!-- print -->
+  <symbol id="icon-print" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
+    <rect x="6" y="14" width="12" height="8"/>
+  </symbol>
+  <!-- key / password -->
+  <symbol id="icon-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+  </symbol>
+  <!-- signout / logout -->
+  <symbol id="icon-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+  </symbol>
+  <!-- download / csv -->
+  <symbol id="icon-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+  </symbol>
+  <!-- trash / delete -->
+  <symbol id="icon-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+  </symbol>
+  <!-- close / x -->
+  <symbol id="icon-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+  </symbol>
+  <!-- lock -->
+  <symbol id="icon-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+  </symbol>
+  <!-- warning / alert triangle -->
+  <symbol id="icon-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </symbol>
+  <!-- note / comment -->
+  <symbol id="icon-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+  </symbol>
+  <!-- user -->
+  <symbol id="icon-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>
+  </symbol>
+  <!-- shield / estop -->
+  <symbol id="icon-stop" viewBox="0 0 24 24" fill="currentColor">
+    <rect x="3" y="3" width="18" height="18" rx="3"/>
+  </symbol>
+  <!-- plus -->
+  <symbol id="icon-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </symbol>
+  <!-- refresh-lock (no-refresh badge) -->
+  <symbol id="icon-no-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+    <line x1="2" y1="2" x2="22" y2="22" stroke-width="2"/>
+  </symbol>
+</svg>
+
 <!-- ===== TOP NAV ===== -->
 <nav class="dash-nav">
     <div class="dash-nav-left">
         <div class="dash-logo">
-            <span class="dash-logo-icon">⚗</span>
+            <svg class="dash-logo-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 3h6M9 3v7L4.5 17A2 2 0 006.4 20h11.2a2 2 0 001.9-3L15 10V3"/>
+                <line x1="6.5" y1="14" x2="17.5" y2="14"/>
+            </svg>
             <div>
                 <div class="dash-logo-title">AMRDS</div>
                 <div class="dash-logo-sub">Multi-Reagent Dispensing System</div>
@@ -27,37 +126,45 @@
             <span class="status-dot" id="statusDot"></span>
             <span id="connectionStatus">Connecting...</span>
         </div>
+        <!-- Refresh lock badge — shown only during active dispense -->
+        <div class="dispense-lock-badge" id="dispenseLockBadge" style="display:none">
+            <svg width="13" height="13"><use href="#icon-no-refresh"/></svg>
+            DO NOT REFRESH
+        </div>
     </div>
     <div class="dash-nav-right">
-        <!-- Inventory button — admin + operator -->
         <div class="nav-tooltip-wrap">
-            <button class="nav-icon-btn" onclick="openInventoryModal()" title="Inventory">🧪</button>
+            <button class="nav-icon-btn" onclick="openInventoryModal()" title="Inventory">
+                <svg width="16" height="16"><use href="#icon-flask"/></svg>
+            </button>
             <span class="nav-tooltip">Reagent Inventory</span>
         </div>
-        <!-- Analytics button -->
         <div class="nav-tooltip-wrap">
-            <button class="nav-icon-btn" onclick="openAnalyticsModal()" title="Analytics">📊</button>
+            <button class="nav-icon-btn" onclick="openAnalyticsModal()" title="Analytics">
+                <svg width="16" height="16"><use href="#icon-analytics"/></svg>
+            </button>
             <span class="nav-tooltip">Analytics</span>
         </div>
         <div class="nav-tooltip-wrap">
             <button class="nav-icon-btn" onclick="toggleDarkMode()">
-                <span id="darkModeIcon">☀</span>
+                <svg width="16" height="16" id="darkModeIcon"><use href="#icon-sun"/></svg>
             </button>
             <span class="nav-tooltip">Toggle Theme</span>
         </div>
         {% if role == 'admin' %}
         <div class="nav-tooltip-wrap">
-            <button class="nav-icon-btn" onclick="openUserModal()">⚙</button>
+            <button class="nav-icon-btn" onclick="openUserModal()">
+                <svg width="16" height="16"><use href="#icon-settings"/></svg>
+            </button>
             <span class="nav-tooltip">Manage Users</span>
         </div>
         {% endif %}
-        <!-- User dropdown -->
         <div class="user-dropdown-wrap" id="userDropdownWrap">
             <div class="nav-user-chip" onclick="toggleUserDropdown()" id="userChip">
                 <span class="nav-user-avatar" id="userAvatar">{{ username[0] | upper }}</span>
                 <span class="nav-user-name" id="operatorName">{{ username }}</span>
                 <span class="nav-role-pill role-{{ role }}" id="roleBadge">{{ role }}</span>
-                <span class="user-chip-caret">▾</span>
+                <svg class="user-chip-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
             </div>
             <div class="user-dropdown" id="userDropdown">
                 <div class="user-dropdown-header">
@@ -68,20 +175,30 @@
                     </div>
                 </div>
                 <div class="user-dropdown-divider"></div>
-                <button class="user-dropdown-item" onclick="closeUserDropdown(); openLogDrawer()">📋 View Activity</button>
-                <button class="user-dropdown-item" onclick="closeUserDropdown(); openAnalyticsModal()">📊 Analytics</button>
-                <button class="user-dropdown-item" onclick="closeUserDropdown(); printReport()">🖨 Print Report</button>
-                <button class="user-dropdown-item" onclick="closeUserDropdown(); openChangePasswordModal()">🔑 Change Password</button>
+                <button class="user-dropdown-item" onclick="closeUserDropdown(); openLogDrawer()">
+                    <svg width="15" height="15"><use href="#icon-log"/></svg> View Activity
+                </button>
+                <button class="user-dropdown-item" onclick="closeUserDropdown(); openAnalyticsModal()">
+                    <svg width="15" height="15"><use href="#icon-analytics"/></svg> Analytics
+                </button>
+                <button class="user-dropdown-item" onclick="closeUserDropdown(); printReport()">
+                    <svg width="15" height="15"><use href="#icon-print"/></svg> Print Report
+                </button>
+                <button class="user-dropdown-item" onclick="closeUserDropdown(); openChangePasswordModal()">
+                    <svg width="15" height="15"><use href="#icon-key"/></svg> Change Password
+                </button>
                 <div class="user-dropdown-divider"></div>
-                <button class="user-dropdown-item danger" onclick="doLogout()">⏏ Sign Out</button>
+                <button class="user-dropdown-item danger" onclick="doLogout()">
+                    <svg width="15" height="15"><use href="#icon-logout"/></svg> Sign Out
+                </button>
             </div>
         </div>
     </div>
 </nav>
 
-<!-- ===== INVENTORY WARNING BANNER (shown when stock is low) ===== -->
+<!-- ===== INVENTORY WARNING BANNER ===== -->
 <div id="inventoryWarningBanner" class="inventory-warning-banner" style="display:none;">
-    <span class="swb-icon">⚗</span>
+    <svg width="16" height="16"><use href="#icon-warning"/></svg>
     <span class="swb-text" id="inventoryWarningText">Low reagent stock detected.</span>
     <button class="inv-warn-btn" onclick="openInventoryModal()">View Inventory</button>
 </div>
@@ -97,12 +214,18 @@
                     <span class="reagent-badge badge-a">A</span>
                     <span class="dash-card-title" id="labelReagentA">Reagent A</span>
                 </div>
-                <button class="icon-btn-sm" onclick="openRenameModal('A')" title="Rename">✏</button>
+                <button class="icon-btn-sm" onclick="openRenameModal('A')" title="Rename">
+                    <svg width="13" height="13"><use href="#icon-edit"/></svg>
+                </button>
             </div>
             <div class="dash-card-body">
-                <div class="volume-display" id="waterValue">100</div>
-                <div class="volume-unit">ml</div>
-                <input type="range" class="dash-slider slider-a" id="waterSlider" min="0" max="1000" value="100">
+                <!-- Quick number input + slider -->
+                <div class="volume-input-row">
+                    <input type="number" class="volume-number-input" id="waterNumberInput"
+                           min="0" max="1000" value="0" step="1">
+                    <span class="volume-unit-label">ml</span>
+                </div>
+                <input type="range" class="dash-slider slider-a" id="waterSlider" min="0" max="1000" value="0">
                 <div class="slider-labels"><span>0 ml</span><span>1000 ml</span></div>
             </div>
         </div>
@@ -112,23 +235,28 @@
                     <span class="reagent-badge badge-b">B</span>
                     <span class="dash-card-title" id="labelReagentB">Reagent B</span>
                 </div>
-                <button class="icon-btn-sm" onclick="openRenameModal('B')" title="Rename">✏</button>
+                <button class="icon-btn-sm" onclick="openRenameModal('B')" title="Rename">
+                    <svg width="13" height="13"><use href="#icon-edit"/></svg>
+                </button>
             </div>
             <div class="dash-card-body">
-                <div class="volume-display" id="syrupValue">50</div>
-                <div class="volume-unit">ml</div>
-                <input type="range" class="dash-slider slider-b" id="syrupSlider" min="0" max="1000" value="50">
+                <div class="volume-input-row">
+                    <input type="number" class="volume-number-input" id="syrupNumberInput"
+                           min="0" max="1000" value="0" step="1">
+                    <span class="volume-unit-label">ml</span>
+                </div>
+                <input type="range" class="dash-slider slider-b" id="syrupSlider" min="0" max="1000" value="0">
                 <div class="slider-labels"><span>0 ml</span><span>1000 ml</span></div>
             </div>
         </div>
     </div>
 
-    <!-- Row 2: Protocols (dynamic, replaces hardcoded presets) -->
+    <!-- Row 2: Protocols -->
     <div class="dash-card mb-4">
         <div class="dash-card-header">
             <span class="dash-card-title">Protocols</span>
-            <button class="icon-btn-sm" onclick="openProtocolBuilderModal()" title="New Protocol" style="width:auto;padding:0 10px;font-size:0.78rem;gap:4px;">
-                + New
+            <button class="icon-btn-sm" onclick="openProtocolBuilderModal()" title="New Protocol" style="width:auto;padding:0 10px;font-size:0.78rem;gap:4px;display:flex;align-items:center;">
+                <svg width="12" height="12"><use href="#icon-plus"/></svg> New
             </button>
         </div>
         <div id="protocolsBody" class="protocols-body">
@@ -140,7 +268,7 @@
     <div class="dash-grid-2 mb-4">
         <div class="action-bare">
             <button class="btn-dispense" id="dispenseBtn" onclick="startDispensing()">
-                <span id="dispenseBtnText">▶ Initiate Dispense</span>
+                <span id="dispenseBtnText">Initiate Dispense</span>
             </button>
         </div>
         <div class="dash-card">
@@ -151,28 +279,28 @@
                 <div class="summary-metrics">
                     <div class="metric-item">
                         <div class="metric-label"><span class="summary-dot dot-a"></span><span id="summaryLabelA">Reagent A</span></div>
-                        <div class="metric-value text-a" id="summaryVolA">100 ml</div>
+                        <div class="metric-value text-a" id="summaryVolA">0 ml</div>
                     </div>
                     <div class="metric-divider">+</div>
                     <div class="metric-item">
                         <div class="metric-label"><span class="summary-dot dot-b"></span><span id="summaryLabelB">Reagent B</span></div>
-                        <div class="metric-value text-b" id="summaryVolB">50 ml</div>
+                        <div class="metric-value text-b" id="summaryVolB">0 ml</div>
                     </div>
                     <div class="metric-divider">=</div>
                     <div class="metric-item">
                         <div class="metric-label">Total</div>
-                        <div class="metric-value" id="summaryTotal">150 ml</div>
+                        <div class="metric-value" id="summaryTotal">0 ml</div>
                     </div>
                 </div>
                 <div class="ratio-box mt-3">
                     <div class="ratio-box-label">Ratio A : B</div>
                     <div class="ratio-bar mt-2">
-                        <div class="ratio-seg seg-a" id="ratioSegA" style="width:67%"></div>
-                        <div class="ratio-seg seg-b" id="ratioSegB" style="width:33%"></div>
+                        <div class="ratio-seg seg-a" id="ratioSegA" style="width:50%"></div>
+                        <div class="ratio-seg seg-b" id="ratioSegB" style="width:50%"></div>
                     </div>
                     <div class="ratio-display mt-2">
                         <span class="ratio-tag tag-a"><span id="summaryLabelA2">A</span></span>
-                        <span class="ratio-value" id="summaryRatio">2 : 1</span>
+                        <span class="ratio-value" id="summaryRatio">— : —</span>
                         <span class="ratio-tag tag-b"><span id="summaryLabelB2">B</span></span>
                     </div>
                 </div>
@@ -197,33 +325,45 @@
     <div class="drawer-header">
         <button class="drawer-close" onclick="closeLogDrawer()">← Back</button>
         <div class="drawer-header-center">
-            <div class="drawer-title">📋 Dispense Log</div>
+            <div class="drawer-title">
+                <svg width="14" height="14" style="vertical-align:-2px"><use href="#icon-log"/></svg>
+                Dispense Log
+            </div>
             <div class="drawer-sub" id="drawerSub">All records</div>
         </div>
         <div class="d-flex gap-2 align-items-center">
-            <button class="drawer-btn" onclick="exportCSV()">⬇ CSV</button>
-            <button class="drawer-btn" onclick="printReport()">🖨 Print</button>
-            <button class="drawer-btn danger admin-only" onclick="clearHistory()" style="display:none">Clear</button>
+            <button class="drawer-btn" onclick="exportCSV()">
+                <svg width="13" height="13" style="vertical-align:-2px"><use href="#icon-download"/></svg> CSV
+            </button>
+            <button class="drawer-btn" onclick="printReport()">
+                <svg width="13" height="13" style="vertical-align:-2px"><use href="#icon-print"/></svg> Print
+            </button>
+            <button class="drawer-btn danger admin-only" onclick="clearHistory()" style="display:none">
+                <svg width="13" height="13" style="vertical-align:-2px"><use href="#icon-trash"/></svg> Clear
+            </button>
         </div>
     </div>
     <div class="drawer-body">
         <ul class="log-list" id="historyList"><li class="log-empty">Loading...</li></ul>
         <div class="drawer-pagination">
-            <button class="drawer-page-btn" id="prevHistory" onclick="prevHistory()">◀ Prev</button>
+            <button class="drawer-page-btn" id="prevHistory" onclick="prevHistory()">&#9664; Prev</button>
             <span class="drawer-page-info" id="pageInfo">Page 1</span>
-            <button class="drawer-page-btn" id="nextHistory" onclick="nextHistory()">Next ▶</button>
+            <button class="drawer-page-btn" id="nextHistory" onclick="nextHistory()">Next &#9654;</button>
         </div>
     </div>
 </div>
 
 <!-- ===== MODALS ===== -->
 
-<!-- Confirmation Modal -->
+<!-- Confirmation Modal — includes dispense note field -->
 <div class="modal fade" id="confirmModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content dash-modal">
             <div class="modal-header dash-modal-header">
-                <h5 class="modal-title">⚗ Confirm Dispense</h5>
+                <h5 class="modal-title">
+                    <svg width="15" height="15" style="vertical-align:-2px"><use href="#icon-flask"/></svg>
+                    Confirm Dispense
+                </h5>
             </div>
             <div class="modal-body">
                 <table class="table table-sm dash-table">
@@ -235,11 +375,23 @@
                         <tr><td>Sequence</td><td class="text-end"><span id="confirmSequence" class="badge bg-secondary">—</span></td></tr>
                     </tbody>
                 </table>
-                <div class="dash-warning mt-2">⚠ Ensure all vessels are correctly positioned before proceeding.</div>
+                <!-- Note / comment field -->
+                <div class="mb-2">
+                    <label class="dash-label" style="display:flex;align-items:center;gap:5px;">
+                        <svg width="13" height="13"><use href="#icon-note"/></svg>
+                        Dispense Note <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3)">(optional)</span>
+                    </label>
+                    <input type="text" class="dash-input" id="dispenseNoteInput" maxlength="500"
+                           placeholder="e.g. Batch #42, Sample ID, run condition…">
+                </div>
+                <div class="dash-warning mt-2">
+                    <svg width="13" height="13" style="vertical-align:-2px"><use href="#icon-warning"/></svg>
+                    Ensure all vessels are correctly positioned before proceeding.
+                </div>
             </div>
             <div class="modal-footer dash-modal-footer">
                 <button class="btn-modal-cancel" data-bs-dismiss="modal">Cancel</button>
-                <button class="btn-modal-confirm" id="confirmDispenseBtn">▶ Confirm & Dispense</button>
+                <button class="btn-modal-confirm" id="confirmDispenseBtn">Confirm &amp; Dispense</button>
             </div>
         </div>
     </div>
@@ -265,12 +417,15 @@
     </div>
 </div>
 
-<!-- Protocol Builder Modal -->
+<!-- Protocol Builder Modal (create + edit) -->
 <div class="modal fade" id="protocolBuilderModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content dash-modal">
             <div class="modal-header dash-modal-header">
-                <h5 class="modal-title">📋 New Protocol</h5>
+                <h5 class="modal-title" id="protocolBuilderTitle">
+                    <svg width="14" height="14" style="vertical-align:-2px"><use href="#icon-log"/></svg>
+                    New Protocol
+                </h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -280,8 +435,10 @@
                 </div>
                 <div class="mb-1">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <label class="dash-label" style="margin:0">Steps <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3);font-size:.7rem">(each step runs Reagent A then Reagent B sequentially — set to 0 to skip)</span></label>
-                        <button class="icon-btn-sm" onclick="addProtocolStep()" style="width:auto;padding:0 10px;font-size:0.78rem;">+ Add Step</button>
+                        <label class="dash-label" style="margin:0">Steps <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3);font-size:.7rem">(set to 0 to skip a reagent)</span></label>
+                        <button class="icon-btn-sm" onclick="addProtocolStep()" style="width:auto;padding:0 10px;font-size:0.78rem;display:flex;align-items:center;gap:4px;">
+                            <svg width="11" height="11"><use href="#icon-plus"/></svg> Add Step
+                        </button>
                     </div>
                     <div id="protocolStepsContainer" class="psteps-container"></div>
                 </div>
@@ -294,7 +451,7 @@
             </div>
             <div class="modal-footer dash-modal-footer">
                 <button class="btn-modal-cancel" data-bs-dismiss="modal">Cancel</button>
-                <button class="btn-modal-confirm" onclick="saveProtocol()">Save Protocol</button>
+                <button class="btn-modal-confirm" id="protocolSaveBtn" onclick="saveProtocol()">Save Protocol</button>
             </div>
         </div>
     </div>
@@ -305,20 +462,31 @@
     <div class="modal-dialog modal-dialog-centered modal-xl">
         <div class="modal-content dash-modal">
             <div class="modal-header dash-modal-header">
-                <h5 class="modal-title">📊 Dispense Analytics</h5>
+                <h5 class="modal-title">
+                    <svg width="14" height="14" style="vertical-align:-2px"><use href="#icon-analytics"/></svg>
+                    Dispense Analytics
+                </h5>
                 <div class="d-flex gap-2 align-items-center">
-                    <button class="drawer-btn" onclick="printReport()">🖨 Print Report</button>
+                    <button class="drawer-btn" onclick="printReport()">
+                        <svg width="13" height="13" style="vertical-align:-2px"><use href="#icon-print"/></svg> Print Report
+                    </button>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
             </div>
             <div class="modal-body" style="padding:20px">
-                <!-- Summary cards -->
+                <!-- Date range filter -->
+                <div class="analytics-filter-row" id="analyticsFilterRow">
+                    <label class="dash-label" style="margin:0;white-space:nowrap">Date Range</label>
+                    <input type="date" class="dash-input analytics-date-input" id="analyticsDateFrom" placeholder="From">
+                    <span style="font-family:var(--font-mono);font-size:.78rem;color:var(--text-3)">to</span>
+                    <input type="date" class="dash-input analytics-date-input" id="analyticsDateTo" placeholder="To">
+                    <button class="btn-modal-confirm" onclick="applyAnalyticsFilter()" style="padding:6px 14px;font-size:.76rem;">Apply</button>
+                    <button class="btn-modal-cancel" onclick="clearAnalyticsFilter()" style="padding:6px 14px;font-size:.76rem;">Clear</button>
+                </div>
                 <div class="analytics-summary-row" id="analyticsSummary"></div>
-                <!-- Chart -->
                 <div class="analytics-chart-wrap">
                     <canvas id="analyticsChart"></canvas>
                 </div>
-                <!-- Operator breakdown (admin only) -->
                 <div id="analyticsOperatorTable"></div>
             </div>
         </div>
@@ -330,7 +498,10 @@
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content dash-modal">
             <div class="modal-header dash-modal-header">
-                <h5 class="modal-title">🧪 Reagent Inventory</h5>
+                <h5 class="modal-title">
+                    <svg width="14" height="14" style="vertical-align:-2px"><use href="#icon-flask"/></svg>
+                    Reagent Inventory
+                </h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" id="inventoryBody">
@@ -348,7 +519,10 @@
     <div class="modal-dialog modal-dialog-centered modal-sm">
         <div class="modal-content dash-modal">
             <div class="modal-header dash-modal-header">
-                <h5 class="modal-title">🔑 Change Password</h5>
+                <h5 class="modal-title">
+                    <svg width="14" height="14" style="vertical-align:-2px"><use href="#icon-key"/></svg>
+                    Change Password
+                </h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -379,7 +553,10 @@
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content dash-modal">
             <div class="modal-header dash-modal-header">
-                <h5 class="modal-title">⚙ User Management</h5>
+                <h5 class="modal-title">
+                    <svg width="14" height="14" style="vertical-align:-2px"><use href="#icon-settings"/></svg>
+                    User Management
+                </h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -409,7 +586,7 @@
 <!-- ===== DISPENSING OVERLAY ===== -->
 <div id="dispenseOverlay" style="display:none;position:fixed;inset:0;z-index:2000;background:var(--bg);flex-direction:column;overflow-y:auto;">
     <div id="ovNav" style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);flex-shrink:0;">
-        <span style="font-family:var(--font-mono);font-size:.85rem;font-weight:700;letter-spacing:.06em;color:var(--text)">&#9880; AMRDS &mdash; Live Dispense</span>
+        <span style="font-family:var(--font-mono);font-size:.85rem;font-weight:700;letter-spacing:.06em;color:var(--text)">AMRDS &mdash; Live Dispense</span>
         <span id="ovStepBadge" class="ov-step-badge">Step 1 of 1</span>
         <span id="ovElapsed" style="font-family:var(--font-mono);font-size:.78rem;color:var(--text-3)">00:00</span>
     </div>
@@ -466,7 +643,10 @@
             <div class="ov-pill"><div class="ov-pill-label">Elapsed</div><div class="ov-pill-val" id="ovElapsed2">00:00</div></div>
         </div>
         <div id="ovStatusMsg" class="ov-status-msg">Initialising&hellip;</div>
-        <button class="ov-estop-btn" onclick="emergencyStop()">&#9632; EMERGENCY STOP</button>
+        <button class="ov-estop-btn" onclick="emergencyStop()">
+            <svg width="16" height="16" style="vertical-align:-2px;margin-right:8px"><use href="#icon-stop"/></svg>
+            EMERGENCY STOP
+        </button>
     </div>
     <!-- COMPLETE STATE -->
     <div id="ovStateComplete" style="display:none">
@@ -495,7 +675,9 @@
         </div>
         <div class="ov-result-title" style="color:var(--danger)">All Pumps Halted</div>
         <div class="ov-result-sub" id="ovHaltedStep"></div>
-        <div class="ov-result-sub">Inspect system before resuming.</div>
+        <!-- Emergency stop reason message -->
+        <div class="ov-estop-reason" id="ovHaltedReason" style="display:none"></div>
+        <div class="ov-result-sub">Inspect the system before resuming any operations.</div>
         <div class="ov-metrics-grid">
             <div class="ov-result-metric"><div class="ov-rm-label" id="ovHaltedNameA">Reagent A</div><div class="ov-rm-val ov-vol-a" id="ovHaltedVolA">&mdash;</div></div>
             <div class="ov-result-metric"><div class="ov-rm-label" id="ovHaltedNameB">Reagent B</div><div class="ov-rm-val ov-vol-b" id="ovHaltedVolB">&mdash;</div></div>
@@ -511,10 +693,10 @@
 <!-- Session Expired Overlay -->
 <div id="sessionExpiredOverlay" class="session-overlay" style="display:none;">
     <div class="session-box">
-        <div class="session-icon">🔒</div>
+        <svg width="40" height="40" style="color:var(--warning);margin-bottom:14px"><use href="#icon-lock"/></svg>
         <h5 class="session-title">Session Expired</h5>
         <p class="session-msg">Your session has expired. Please sign in again.</p>
-        <a href="/login" class="btn-modal-confirm">▶ Return to Login</a>
+        <a href="/login" class="btn-modal-confirm">Return to Login</a>
     </div>
 </div>
 

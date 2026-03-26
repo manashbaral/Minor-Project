@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME  = os.path.join(BASE_DIR, "history.db")
 print(f"Database path: {DB_NAME}")
 
-ESP32_IP        = "192.168.63.3"
+ESP32_IP        = "192.168.118.3"
 esp32_connected = False
 esp32_last_seen = None
 db_lock         = threading.Lock()
@@ -35,7 +35,7 @@ def init_db():
         conn = get_db()
         cur  = conn.cursor()
 
-        # dispensing_log
+        # dispensing_log — add note column if missing
         cur.execute("""CREATE TABLE IF NOT EXISTS dispensing_log (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
             start_time             TEXT,
@@ -46,11 +46,15 @@ def init_db():
             dispensed_reagent_b_ml REAL,
             status                 TEXT,
             stop_reason            TEXT,
-            operator               TEXT DEFAULT 'unknown'
+            operator               TEXT DEFAULT 'unknown',
+            note                   TEXT DEFAULT ''
         )""")
         cur.execute("PRAGMA table_info(dispensing_log)")
-        if "operator" not in [r["name"] for r in cur.fetchall()]:
+        cols = [r["name"] for r in cur.fetchall()]
+        if "operator" not in cols:
             cur.execute("ALTER TABLE dispensing_log ADD COLUMN operator TEXT DEFAULT 'unknown'")
+        if "note" not in cols:
+            cur.execute("ALTER TABLE dispensing_log ADD COLUMN note TEXT DEFAULT ''")
 
         # users
         cur.execute("""CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +71,7 @@ def init_db():
                  datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
             print("Default admin created — username: admin | password: admin123")
 
-        # settings  (key/value store — reagent names etc.)
+        # settings
         cur.execute("""CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -105,7 +109,7 @@ def init_db():
         print("Database initialised successfully.")
 
 
-# ── Decorators ───────────────────────────────────────────────────────────────
+# ── Decorators ────────────────────────────────────────────────
 
 def login_required(f):
     @wraps(f)
@@ -142,7 +146,7 @@ def esp32_auth(f):
     return decorated
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -180,7 +184,7 @@ def session_info():
     return jsonify({"username": session.get("username"), "role": session.get("role")})
 
 
-# ── Users ────────────────────────────────────────────────────────────────────
+# ── Users ─────────────────────────────────────────────────────
 
 @app.route("/users", methods=["GET"])
 @admin_required
@@ -255,7 +259,7 @@ def change_password():
     return jsonify({"status": "success", "message": "Password updated successfully."})
 
 
-# ── Settings — reagent names ──────────────────────────────────────────────────
+# ── Settings ──────────────────────────────────────────────────
 
 @app.route("/settings/reagent-names", methods=["GET"])
 @login_required
@@ -286,7 +290,7 @@ def save_reagent_names():
     return jsonify({"status": "success"})
 
 
-# ── Protocols ─────────────────────────────────────────────────────────────────
+# ── Protocols ─────────────────────────────────────────────────
 
 @app.route("/protocols", methods=["GET"])
 @login_required
@@ -321,18 +325,12 @@ def create_protocol():
     if not steps or not isinstance(steps, list):
         return jsonify({"status": "error", "message": "At least one step is required."}), 400
     for s in steps:
-        if "vol_a" in s or "vol_b" in s:
-            vol_a = float(s.get("vol_a") or 0)
-            vol_b = float(s.get("vol_b") or 0)
-            if vol_a < 0 or vol_b < 0:
-                return jsonify({"status": "error", "message": "Step volumes cannot be negative."}), 400
-            if vol_a == 0 and vol_b == 0:
-                return jsonify({"status": "error", "message": "Each step needs at least one non-zero volume."}), 400
-        else:
-            if s.get("pump") not in (1, 2):
-                return jsonify({"status": "error", "message": "Each step must specify pump 1 or 2."}), 400
-            if not isinstance(s.get("volume_ml"), (int, float)) or s["volume_ml"] <= 0:
-                return jsonify({"status": "error", "message": "Each step must have a positive volume."}), 400
+        vol_a = float(s.get("vol_a") or 0)
+        vol_b = float(s.get("vol_b") or 0)
+        if vol_a < 0 or vol_b < 0:
+            return jsonify({"status": "error", "message": "Step volumes cannot be negative."}), 400
+        if vol_a == 0 and vol_b == 0:
+            return jsonify({"status": "error", "message": "Each step needs at least one non-zero volume."}), 400
     with db_lock:
         conn = get_db(); cur = conn.cursor()
         cur.execute("INSERT INTO protocols (name,steps_json,created_by,created_at,is_global) VALUES (?,?,?,?,?)",
@@ -340,6 +338,44 @@ def create_protocol():
              datetime.now().strftime("%Y-%m-%d %H:%M:%S"), is_global))
         pid = cur.lastrowid; conn.commit(); conn.close()
     return jsonify({"status": "success", "id": pid})
+
+
+# ── Protocol edit (PUT) — NEW ─────────────────────────────────
+@app.route("/protocols/<int:pid>", methods=["PUT"])
+@login_required
+def update_protocol(pid):
+    username  = session.get("username")
+    role      = session.get("role")
+    data      = request.get_json(force=True) or {}
+    name      = data.get("name", "").strip()
+    steps     = data.get("steps", [])
+    is_global = 1 if (data.get("is_global") and role == "admin") else 0
+
+    if not name:
+        return jsonify({"status": "error", "message": "Protocol name is required."}), 400
+    if not steps or not isinstance(steps, list):
+        return jsonify({"status": "error", "message": "At least one step is required."}), 400
+    for s in steps:
+        vol_a = float(s.get("vol_a") or 0)
+        vol_b = float(s.get("vol_b") or 0)
+        if vol_a == 0 and vol_b == 0:
+            return jsonify({"status": "error", "message": "Each step needs at least one non-zero volume."}), 400
+
+    with db_lock:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT * FROM protocols WHERE id=?", (pid,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"status": "error", "message": "Protocol not found."}), 404
+        if role != "admin" and row["created_by"] != username:
+            conn.close()
+            return jsonify({"status": "error", "message": "Cannot edit another user's protocol."}), 403
+        cur.execute(
+            "UPDATE protocols SET name=?, steps_json=?, is_global=? WHERE id=?",
+            (name, json.dumps(steps), is_global, pid))
+        conn.commit(); conn.close()
+    return jsonify({"status": "success"})
 
 
 @app.route("/protocols/<int:pid>", methods=["DELETE"])
@@ -362,7 +398,7 @@ def delete_protocol(pid):
     return jsonify({"status": "success"})
 
 
-# ── Inventory ─────────────────────────────────────────────────────────────────
+# ── Inventory ─────────────────────────────────────────────────
 
 @app.route("/inventory", methods=["GET"])
 @login_required
@@ -421,7 +457,7 @@ def update_inventory():
     return jsonify({"status": "success"})
 
 
-# ── Analytics ─────────────────────────────────────────────────────────────────
+# ── Analytics — with avg duration per operator ────────────────
 
 @app.route("/analytics")
 @login_required
@@ -446,6 +482,18 @@ def get_analytics():
         total = a + b
         es    = r["status"] == "EMERGENCY_STOP"
 
+        # Duration calculation
+        duration_s = None
+        try:
+            if r.get("start_time") and r.get("end_time"):
+                fmt = "%Y-%m-%d %H:%M:%S"
+                duration_s = (datetime.strptime(r["end_time"], fmt) -
+                              datetime.strptime(r["start_time"], fmt)).total_seconds()
+                if duration_s < 0:
+                    duration_s = None
+        except Exception:
+            pass
+
         if date not in by_date:
             by_date[date] = {"date": date, "total_ml": 0, "reagent_a_ml": 0,
                              "reagent_b_ml": 0, "count": 0, "emergency_stops": 0}
@@ -456,20 +504,30 @@ def get_analytics():
         if es: by_date[date]["emergency_stops"] += 1
 
         if op not in by_op:
-            by_op[op] = {"operator": op, "total_ml": 0, "count": 0, "emergency_stops": 0}
+            by_op[op] = {"operator": op, "total_ml": 0, "count": 0,
+                         "emergency_stops": 0, "_dur_sum": 0, "_dur_cnt": 0}
         by_op[op]["total_ml"] += total
         by_op[op]["count"]    += 1
         if es: by_op[op]["emergency_stops"] += 1
+        if duration_s is not None:
+            by_op[op]["_dur_sum"] += duration_s
+            by_op[op]["_dur_cnt"] += 1
+
+    # Finalise avg duration
+    for op_data in by_op.values():
+        dc = op_data.pop("_dur_cnt")
+        ds = op_data.pop("_dur_sum")
+        op_data["avg_duration_s"] = round(ds / dc, 1) if dc > 0 else None
 
     return jsonify({
-        "by_date":      sorted(by_date.values(), key=lambda x: x["date"]),
-        "by_operator":  sorted(by_op.values(),   key=lambda x: -x["total_ml"]),
+        "by_date":       sorted(by_date.values(), key=lambda x: x["date"]),
+        "by_operator":   sorted(by_op.values(),   key=lambda x: -x["total_ml"]),
         "total_records": len(rows),
-        "role": role
+        "role":          role
     })
 
 
-# ── Report ────────────────────────────────────────────────────────────────────
+# ── Report ────────────────────────────────────────────────────
 
 @app.route("/report")
 @login_required
@@ -500,7 +558,7 @@ def get_report():
     })
 
 
-# ── ESP32 ─────────────────────────────────────────────────────────────────────
+# ── ESP32 ─────────────────────────────────────────────────────
 
 @app.route("/esp32/heartbeat", methods=["POST"])
 def esp32_heartbeat():
@@ -531,7 +589,7 @@ def send_command_to_esp32(endpoint, params=None):
         return False, str(e)
 
 
-# ── Home ──────────────────────────────────────────────────────────────────────
+# ── Home ──────────────────────────────────────────────────────
 
 @app.route("/")
 @login_required
@@ -541,12 +599,14 @@ def home():
                            role=session.get("role"))
 
 
-# ── In-memory dispense session ────────────────────────────────────────────────
+# ── In-memory dispense session ────────────────────────────────
 
 dispense_session = {
     "active": False, "operator": None, "start_time": None,
     "reagent_a": 0.0, "reagent_b": 0.0,
     "dispensed_a": 0.0, "dispensed_b": 0.0,
+    "halted": False,
+    "note": "",
 }
 session_lock = threading.Lock()
 
@@ -558,6 +618,7 @@ def dispense():
         data      = request.get_json(force=True) or {}
         reagent_a = float(data.get("reagent_a", 0))
         reagent_b = float(data.get("reagent_b", 0))
+        note      = str(data.get("note", "")).strip()[:500]
         operator  = session.get("username", "unknown")
         if not esp32_connected:
             return jsonify({"status": "error", "message": "Controller not connected"}), 503
@@ -565,18 +626,46 @@ def dispense():
         if not ok:
             return jsonify({"status": "error", "message": msg}), 500
         with session_lock:
-            if not dispense_session["active"]:
-                dispense_session.update({
-                    "active": True, "operator": operator,
-                    "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "reagent_a": reagent_a, "reagent_b": reagent_b,
-                    "dispensed_a": 0.0, "dispensed_b": 0.0})
-            else:
-                dispense_session["reagent_a"] += reagent_a
-                dispense_session["reagent_b"] += reagent_b
+            dispense_session.update({
+                "active":      True,
+                "operator":    operator,
+                "start_time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "reagent_a":   reagent_a,
+                "reagent_b":   reagent_b,
+                "dispensed_a": 0.0,
+                "dispensed_b": 0.0,
+                "halted":      False,
+                "note":        note,
+            })
         return jsonify({"status": "started"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _do_emergency_stop(data, operator):
+    snapshot = None
+    with session_lock:
+        if dispense_session["active"]:
+            snapshot = {k: dispense_session[k] for k in
+                        ["start_time","reagent_a","dispensed_a","reagent_b","dispensed_b","operator","note"]}
+            snapshot["operator"] = snapshot["operator"] or operator
+            dispense_session["active"] = False
+            dispense_session["halted"] = True
+    if snapshot:
+        with db_lock:
+            conn = get_db(); cur = conn.cursor()
+            cur.execute("""INSERT INTO dispensing_log
+                (start_time,end_time,target_reagent_a_ml,dispensed_reagent_a_ml,
+                 target_reagent_b_ml,dispensed_reagent_b_ml,status,stop_reason,operator,note)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (snapshot["start_time"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                 snapshot["reagent_a"], snapshot["dispensed_a"],
+                 snapshot["reagent_b"], snapshot["dispensed_b"],
+                 "EMERGENCY_STOP", data.get("reason","Emergency stop triggered"),
+                 snapshot["operator"], snapshot.get("note","")))
+            conn.commit(); conn.close()
+        _deduct_inventory(snapshot["dispensed_a"], snapshot["dispensed_b"])
+    return jsonify({"status": "stopped"})
 
 
 @app.route("/emergency-stop", methods=["POST"])
@@ -584,55 +673,53 @@ def dispense():
 def emergency_stop():
     data     = request.get_json(force=True) or {}
     operator = session.get("username", "unknown")
-    ok, _    = send_command_to_esp32("stop")
+    send_command_to_esp32("stop")
+    return _do_emergency_stop(data, operator)
+
+
+@app.route("/esp32/emergency-stop", methods=["POST"])
+@esp32_auth
+def esp32_emergency_stop():
+    """Called by ESP32 firmware (physical button / auto-halt).
+    Sets halted=True in dispense_session so the frontend poll detects it."""
+    data = request.get_json(force=True) or {}
+    return _do_emergency_stop(data, "esp32-hardware")
+
+
+def _do_complete():
     snapshot = None
     with session_lock:
         if dispense_session["active"]:
             snapshot = {k: dispense_session[k] for k in
-                        ["start_time","reagent_a","dispensed_a","reagent_b","dispensed_b","operator"]}
-            snapshot["operator"] = snapshot["operator"] or operator
+                        ["start_time","reagent_a","dispensed_a","reagent_b","dispensed_b","operator","note"]}
             dispense_session["active"] = False
+            dispense_session["halted"] = False
     if snapshot:
         with db_lock:
             conn = get_db(); cur = conn.cursor()
             cur.execute("""INSERT INTO dispensing_log
                 (start_time,end_time,target_reagent_a_ml,dispensed_reagent_a_ml,
-                 target_reagent_b_ml,dispensed_reagent_b_ml,status,stop_reason,operator)
+                 target_reagent_b_ml,dispensed_reagent_b_ml,status,operator,note)
                 VALUES (?,?,?,?,?,?,?,?,?)""",
                 (snapshot["start_time"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                  snapshot["reagent_a"], snapshot["dispensed_a"],
                  snapshot["reagent_b"], snapshot["dispensed_b"],
-                 "EMERGENCY_STOP", data.get("reason","Emergency stop triggered"),
-                 snapshot["operator"]))
+                 "COMPLETED", snapshot["operator"], snapshot.get("note","")))
             conn.commit(); conn.close()
         _deduct_inventory(snapshot["dispensed_a"], snapshot["dispensed_b"])
-    return jsonify({"status": "stopped", "esp32_command": "sent" if ok else "failed"})
+    return jsonify({"status": "completed"})
 
 
 @app.route("/complete", methods=["POST"])
 @login_required
 def complete_dispense():
-    send_command_to_esp32("complete")
-    snapshot = None
-    with session_lock:
-        if dispense_session["active"]:
-            snapshot = {k: dispense_session[k] for k in
-                        ["start_time","reagent_a","dispensed_a","reagent_b","dispensed_b","operator"]}
-            dispense_session["active"] = False
-    if snapshot:
-        with db_lock:
-            conn = get_db(); cur = conn.cursor()
-            cur.execute("""INSERT INTO dispensing_log
-                (start_time,end_time,target_reagent_a_ml,dispensed_reagent_a_ml,
-                 target_reagent_b_ml,dispensed_reagent_b_ml,status,operator)
-                VALUES (?,?,?,?,?,?,?,?)""",
-                (snapshot["start_time"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                 snapshot["reagent_a"], snapshot["dispensed_a"],
-                 snapshot["reagent_b"], snapshot["dispensed_b"],
-                 "COMPLETED", snapshot["operator"]))
-            conn.commit(); conn.close()
-        _deduct_inventory(snapshot["dispensed_a"], snapshot["dispensed_b"])
-    return jsonify({"status": "completed"})
+    return _do_complete()
+
+
+@app.route("/esp32/complete", methods=["POST"])
+@esp32_auth
+def esp32_complete():
+    return _do_complete()
 
 
 def _deduct_inventory(dispensed_a, dispensed_b):
@@ -653,19 +740,30 @@ def _deduct_inventory(dispensed_a, dispensed_b):
 def get_progress():
     with session_lock:
         if not dispense_session["active"]:
-            return jsonify({"active": False,
+            halted = dispense_session.get("halted", False)
+            if halted:
+                dispense_session["halted"] = False
+            return jsonify({
+                "active":      False,
+                "halted":      halted,
                 "dispensed_a": dispense_session["dispensed_a"],
                 "dispensed_b": dispense_session["dispensed_b"],
-                "target_a": dispense_session["reagent_a"],
-                "target_b": dispense_session["reagent_b"],
-                "pct_a": 100.0, "pct_b": 100.0})
-        ta = dispense_session["reagent_a"];   tb = dispense_session["reagent_b"]
-        da = dispense_session["dispensed_a"]; db_ = dispense_session["dispensed_b"]
-        pa = min(round(da/ta*100,1) if ta>0 else 100.0, 100.0)
-        pb = min(round(db_/tb*100,1) if tb>0 else 100.0, 100.0)
-        return jsonify({"active": True,
-            "dispensed_a": round(da,2), "dispensed_b": round(db_,2),
-            "target_a": ta, "target_b": tb, "pct_a": pa, "pct_b": pb})
+                "target_a":    dispense_session["reagent_a"],
+                "target_b":    dispense_session["reagent_b"],
+                "pct_a":       100.0,
+                "pct_b":       100.0,
+            })
+        ta  = dispense_session["reagent_a"];   tb  = dispense_session["reagent_b"]
+        da  = dispense_session["dispensed_a"]; db_ = dispense_session["dispensed_b"]
+        pa  = min(round(da/ta*100,1)  if ta>0 else 100.0, 100.0)
+        pb  = min(round(db_/tb*100,1) if tb>0 else 100.0, 100.0)
+        return jsonify({
+            "active":      True,
+            "halted":      False,
+            "dispensed_a": round(da,2),  "dispensed_b": round(db_,2),
+            "target_a":    ta,           "target_b":    tb,
+            "pct_a":       pa,           "pct_b":       pb,
+        })
 
 
 @app.route("/update-progress", methods=["POST"])
@@ -679,7 +777,7 @@ def update_progress():
     return jsonify({"status": "updated"})
 
 
-# ── History ───────────────────────────────────────────────────────────────────
+# ── History ───────────────────────────────────────────────────
 
 @app.route("/history")
 @login_required
@@ -696,21 +794,50 @@ def get_history():
     events = []
     for r in rows:
         if r["status"] == "COMPLETED":
-            msg  = (f"Reagent A: {r['dispensed_reagent_a_ml']} ml, "
-                    f"Reagent B: {r['dispensed_reagent_b_ml']} ml | "
-                    f"Total: {(r['dispensed_reagent_a_ml'] or 0)+(r['dispensed_reagent_b_ml'] or 0):.1f} ml")
+            msg   = (f"Reagent A: {r['dispensed_reagent_a_ml']} ml, "
+                     f"Reagent B: {r['dispensed_reagent_b_ml']} ml | "
+                     f"Total: {(r['dispensed_reagent_a_ml'] or 0)+(r['dispensed_reagent_b_ml'] or 0):.1f} ml")
             type_ = "DISPENSE"
         elif r["status"] == "EMERGENCY_STOP":
-            msg  = (f"Stopped at — A: {r['dispensed_reagent_a_ml']}/{r['target_reagent_a_ml']} ml, "
-                    f"B: {r['dispensed_reagent_b_ml']}/{r['target_reagent_b_ml']} ml | "
-                    f"Reason: {r['stop_reason']}")
+            msg   = (f"Stopped at — A: {r['dispensed_reagent_a_ml']}/{r['target_reagent_a_ml']} ml, "
+                     f"B: {r['dispensed_reagent_b_ml']}/{r['target_reagent_b_ml']} ml | "
+                     f"Reason: {r['stop_reason']}")
             type_ = "EMERGENCY"
         else:
             continue
-        events.append({"id": r["id"], "timestamp": r["start_time"],
-                        "end_time": r.get("end_time",""), "operator": r.get("operator","unknown"),
-                        "type": type_, "message": msg})
+        events.append({
+            "id":        r["id"],
+            "timestamp": r["start_time"],
+            "end_time":  r.get("end_time",""),
+            "operator":  r.get("operator","unknown"),
+            "type":      type_,
+            "message":   msg,
+            "note":      r.get("note","") or ""
+        })
     return jsonify(events)
+
+
+# ── History note update — NEW ─────────────────────────────────
+@app.route("/history/<int:record_id>/note", methods=["POST"])
+@login_required
+def update_history_note(record_id):
+    data     = request.get_json(force=True) or {}
+    note     = str(data.get("note","")).strip()[:500]
+    role     = session.get("role")
+    username = session.get("username")
+    with db_lock:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT operator FROM dispensing_log WHERE id=?", (record_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"status":"error","message":"Record not found."}), 404
+        if role != "admin" and row["operator"] != username:
+            conn.close()
+            return jsonify({"status":"error","message":"Cannot edit another operator's record."}), 403
+        cur.execute("UPDATE dispensing_log SET note=? WHERE id=?", (note, record_id))
+        conn.commit(); conn.close()
+    return jsonify({"status":"success"})
 
 
 @app.route("/clear-history", methods=["POST"])
@@ -739,7 +866,7 @@ def delete_history(record_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# ── Error handlers ────────────────────────────────────────────────────────────
+# ── Error handlers ────────────────────────────────────────────
 
 @app.errorhandler(400)
 def bad_request(e):      return jsonify({"status":"error","message":str(e)}), 400
@@ -755,7 +882,7 @@ def internal_error(e):   return jsonify({"status":"error","message":f"Internal s
 def handle_exception(e): return jsonify({"status":"error","message":str(e)}), 500
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────
 
 if __name__ == "__main__":
     init_db()
@@ -765,4 +892,4 @@ if __name__ == "__main__":
         local_ip = "127.0.0.1"
     print(f"Local:   http://localhost:8000")
     print(f"Network: http://{local_ip}:8000")
-    app.run(debug=True, port=8000, host="0.0.0.0", threaded=True)
+    app.run(debug=False, port=8000, host="0.0.0.0", threaded=True)
