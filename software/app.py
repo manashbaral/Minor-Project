@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME  = os.path.join(BASE_DIR, "history.db")
 print(f"Database path: {DB_NAME}")
 
-ESP32_IP        = "192.168.118.3"
+ESP32_IP        = "" #your esp32 IP address
 esp32_connected = False
 esp32_last_seen = None
 db_lock         = threading.Lock()
