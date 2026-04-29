@@ -14,3 +14,7 @@ __pycache__/
 
 # VS Code settings
 .vscode/
+
+# OS generated files
+.DS_Store
+desktop.ini
